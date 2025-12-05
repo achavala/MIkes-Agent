@@ -1,64 +1,44 @@
-# Secrets and API Keys
+# Secrets
 config.py
 live_config.py
 paper_config.py
 .env
-*.key
-*.pem
 
-# Models (large files - optional to exclude)
-# *.zip
-# mike_rl_model.zip
-# mike_rl_agent.zip
+# Models
+*.zip
+mike_rl_model.zip
+mike_rl_agent.zip
 
 # Environment
 venv/
-env/
-ENV/
-.venv
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-*.egg-info/
-dist/
-build/
+*.pyc
+
+# OS
+.DS_Store
 
 # Logs
-*.log
 logs/
+*.log
 mike.log
 mike_error.log
 streamlit.log
 
-# Trade Data (sensitive)
+# Data files (trading history, CSVs)
 *.csv
-!requirements.txt
-!requirements_railway.txt
-!example_spy_data.csv
-!historical_data.csv
+mike_agent_trades.csv
+mike_agent_trades_*.csv
+test_trade.csv
+trade_history.csv
 
-# OS
-.DS_Store
-Thumbs.db
+# Databases
+*.db
+community_platform.db
 
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# Streamlit
-.streamlit/
-
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-
-# Temporary
-*.tmp
-*.bak
-*.swp
+# Node modules and incomplete projects
+node_modules/
+dashboard/node_modules/
+mobile-app/node_modules/
+# Incomplete project directories (only contain node_modules)
+dashboard/
+mobile-app/

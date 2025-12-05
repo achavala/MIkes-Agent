@@ -1,4 +1,4 @@
-#!/usr/bin/env python3Git: Discard All Changes
+#!/usr/bin/env python3
 """
 MIKE AGENT v3 – RL EDITION – LIVE WITH ALPACA + 10X RISK SAFEGUARDS
 FINAL BATTLE-TESTED VERSION – SAFE FOR LIVE CAPITAL
@@ -16,7 +16,6 @@ from typing import Optional, Dict, Any
 import numpy as np
 import pandas as pd
 import yfinance as yf
-import pytz
 
 # Set environment variables BEFORE importing torch/gym
 os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
@@ -43,28 +42,16 @@ except ImportError:
 
 import config
 
-# Import trade database
-try:
-    from mike_agent_trades import MikeAgentTradeDB
-    TRADE_DB_AVAILABLE = True
-except ImportError:
-    TRADE_DB_AVAILABLE = False
-    print("Warning: mike_agent_trades not available. Trades will not be logged to database.")
-
 # ==================== RISK LIMITS (HARD-CODED – CANNOT BE OVERRIDDEN) ====================
 DAILY_LOSS_LIMIT = -0.15  # -15% daily loss limit
 MAX_POSITION_PCT = 0.25  # Max 25% of equity in one position
-MAX_CONCURRENT = 10  # Max 10 positions at once
+MAX_CONCURRENT = 2  # Max 2 positions at once
 VIX_KILL = 28  # No trades if VIX > 28
 IVR_MIN = 30  # Minimum IV Rank (0-100)
 NO_TRADE_AFTER = "14:30"  # No new entries after 2:30 PM EST
 MAX_DRAWDOWN = 0.30  # Full shutdown if -30% from peak
 MAX_NOTIONAL = 50000  # Max $50k notional per order
 DUPLICATE_ORDER_WINDOW = 300  # 5 minutes in seconds
-FIXED_STOP_LOSS = -0.15  # Fixed -15% stop-loss (always, regardless of volatility regime)
-
-# ==================== TRADING SYMBOLS ====================
-TRADING_SYMBOLS = ['SPY', 'QQQ', 'SPX']  # Trade SPY, QQQ, and SPX
 
 # ==================== IV-ADJUSTED POSITION SIZING ====================
 # Position size adjusts dynamically to IV:
@@ -91,52 +78,44 @@ VOL_REGIMES = {
         "max_pct": 0.30,   # 30% max position size
         "sl": -0.15,
         "hard_sl": -0.25,
-        "tp1": 0.40,       # +40%: Sell 50%
-        "tp2": 0.60,       # +60%: Sell 20% of remaining
-        "tp3": 1.00,       # +100%: Sell 10% of remaining
-        "tp4": 1.50,       # +150%: Sell 10% of remaining
-        "tp5": 2.00,       # +200%: Full exit
-        "trail_activate": 1.50,  # Activate after TP4
-        "trail": 1.00      # Lock in +100% minimum
+        "tp1": 0.30,
+        "tp2": 0.60,
+        "tp3": 1.20,
+        "trail_activate": 0.40,
+        "trail": 0.50
     },
     "normal": {       # VIX 18-25: Mike's default (your data)
         "risk": 0.07,      # 7% risk per trade
         "max_pct": 0.25,   # 25% max position size
         "sl": -0.20,
         "hard_sl": -0.30,
-        "tp1": 0.40,       # +40%: Sell 50%
-        "tp2": 0.60,       # +60%: Sell 20% of remaining
-        "tp3": 1.00,       # +100%: Sell 10% of remaining
-        "tp4": 1.50,       # +150%: Sell 10% of remaining
-        "tp5": 2.00,       # +200%: Full exit
-        "trail_activate": 1.50,  # Activate after TP4
-        "trail": 1.00      # Lock in +100% minimum
+        "tp1": 0.40,
+        "tp2": 0.80,
+        "tp3": 1.50,
+        "trail_activate": 0.50,
+        "trail": 0.60
     },
     "storm": {        # VIX 25-35: Defensive, wide stops, big upside
         "risk": 0.05,      # 5% risk per trade
         "max_pct": 0.20,   # 20% max position size
         "sl": -0.28,
         "hard_sl": -0.40,
-        "tp1": 0.40,       # +40%: Sell 50%
-        "tp2": 0.60,       # +60%: Sell 20% of remaining
-        "tp3": 1.00,       # +100%: Sell 10% of remaining
-        "tp4": 1.50,       # +150%: Sell 10% of remaining
-        "tp5": 2.00,       # +200%: Full exit
-        "trail_activate": 1.50,  # Activate after TP4
-        "trail": 1.00      # Lock in +100% minimum
+        "tp1": 0.60,
+        "tp2": 1.20,
+        "tp3": 2.50,
+        "trail_activate": 0.70,
+        "trail": 0.90
     },
     "crash": {        # VIX > 35: Survive & thrive in chaos
         "risk": 0.03,      # 3% risk per trade
         "max_pct": 0.15,   # 15% max position size
         "sl": -0.35,
         "hard_sl": -0.50,
-        "tp1": 0.40,       # +40%: Sell 50%
-        "tp2": 0.60,       # +60%: Sell 20% of remaining
-        "tp3": 1.00,       # +100%: Sell 10% of remaining
-        "tp4": 1.50,       # +150%: Sell 10% of remaining
-        "tp5": 2.00,       # +200%: Full exit
-        "trail_activate": 1.50,  # Activate after TP4
-        "trail": 1.00      # Lock in +100% minimum
+        "tp1": 1.00,
+        "tp2": 2.00,
+        "tp3": 4.00,
+        "trail_activate": 1.00,
+        "trail": 1.50
     }
 }
 
@@ -172,7 +151,7 @@ class RiskManager:
         self.peak_equity = 0.0
         self.daily_pnl = 0.0
         self.start_of_day_equity = 0.0
-        self.open_positions = {}  # symbol: {entry_premium, entry_price, trail_active, trail_price, entry_time, contracts, qty_remaining, tp1_done, tp2_done, tp3_done, tp4_done, tp5_done, vol_regime}
+        self.open_positions = {}  # symbol: {entry_premium, entry_price, trail_active, trail_price, entry_time, contracts, qty_remaining, tp1_done, tp2_done, tp3_done, vol_regime}
         self.last_order_time = {}
         self.daily_trades = 0
         self.max_daily_trades = 20  # Max 20 trades per day
@@ -368,30 +347,23 @@ class RiskManager:
         max_contracts = int(available_notional / (strike * 100))
         return max(0, max_contracts), available_notional
     
-    def check_order_safety(self, symbol: str, qty: int, price: float, api: tradeapi.REST, premium: float = None) -> tuple[bool, str]:
+    def check_order_safety(self, symbol: str, qty: int, price: float, api: tradeapi.REST) -> tuple[bool, str]:
         """
         Check order-level safeguards with dynamic position size
         Returns: (is_safe, reason_if_unsafe)
-        For options: use premium cost (not strike notional) - this is what you actually pay
         """
-        # For options, use premium cost if provided, otherwise fall back to price (for backward compatibility)
-        if premium is not None:
-            order_cost = qty * premium * 100  # Actual cost: qty * premium * 100
-        else:
-            order_cost = qty * price * 100  # Fallback (shouldn't happen for options)
-        
         # ========== SAFEGUARD 7: Order Size Sanity Check ==========
-        # Check against MAX_NOTIONAL using premium cost (for options)
-        if order_cost > MAX_NOTIONAL:
-            return False, f"Order cost ${order_cost:,.0f} > ${MAX_NOTIONAL:,} limit"
+        notional = qty * price * 100  # Options: qty * strike * 100
+        if notional > MAX_NOTIONAL:
+            return False, f"Notional ${notional:,.0f} > ${MAX_NOTIONAL:,} limit"
         
         # ========== SAFEGUARD 8: Max Position Size (regime-adjusted) ==========
         max_notional = self.get_current_max_notional(api)
         current_exposure = self.get_current_exposure()
         regime_params = self.get_vol_params(self.current_regime)
         
-        if current_exposure + order_cost > max_notional:
-            return False, f"Position would exceed {regime_params['max_pct']:.0%} limit ({self.current_regime.upper()} regime): ${current_exposure + order_cost:,.0f} > ${max_notional:,.0f}"
+        if current_exposure + notional > max_notional:
+            return False, f"Position would exceed {regime_params['max_pct']:.0%} limit ({self.current_regime.upper()} regime): ${current_exposure + notional:,.0f} > ${max_notional:,.0f}"
         
         # ========== SAFEGUARD 9: Duplicate Order Protection ==========
         if symbol in self.last_order_time:
@@ -406,38 +378,11 @@ class RiskManager:
         self.last_order_time[symbol] = datetime.now()
         self.daily_trades += 1
 
-# ==================== MARKET HOURS CHECK ====================
-def is_market_open():
-    """Check if US stock market is currently open (9:30 AM - 4:00 PM EST, weekdays)"""
-    est = pytz.timezone('US/Eastern')
-    now = datetime.now(est)
-    
-    # Check if weekday (Monday=0, Friday=4)
-    if now.weekday() >= 5:  # Saturday or Sunday
-        return False
-    
-    # Market hours: 9:30 AM - 4:00 PM EST
-    market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
-    market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
-    
-    return market_open <= now <= market_close
-
 # ==================== ALPACA SETUP ====================
 def init_alpaca():
     """Initialize Alpaca API"""
     if API_KEY == 'YOUR_PAPER_KEY' or API_SECRET == 'YOUR_PAPER_SECRET':
         raise ValueError("Please set ALPACA_KEY and ALPACA_SECRET in config.py")
-    
-    # Detect if paper keys are being used with live endpoint
-    if not USE_PAPER and (API_KEY.startswith('PK') or 'paper' in API_KEY.lower()):
-        raise ValueError(
-            "❌ ERROR: Paper trading keys detected with LIVE trading mode!\n"
-            "   Paper keys (starting with 'PK') cannot be used with live API.\n"
-            "   Solutions:\n"
-            "   1. Use paper trading: Remove --live flag (default is paper)\n"
-            "   2. Get live keys: Go to https://app.alpaca.markets/dashboard/overview\n"
-            "   3. Update config.py with LIVE API keys (different from paper keys)"
-        )
     
     api = tradeapi.REST(API_KEY, API_SECRET, BASE_URL, api_version='v2')
     
@@ -449,27 +394,6 @@ def init_alpaca():
         print(f"  Buying Power: ${float(account.buying_power):,.2f}")
         return api
     except Exception as e:
-        error_msg = str(e)
-        if "not authorized" in error_msg.lower() or "401" in error_msg:
-            if not USE_PAPER:
-                raise ConnectionError(
-                    f"❌ Authentication failed for LIVE trading:\n"
-                    f"   Error: {error_msg}\n"
-                    f"   Possible causes:\n"
-                    f"   1. Using paper trading keys with live endpoint\n"
-                    f"   2. Live API keys are incorrect or expired\n"
-                    f"   3. Keys don't have trading permissions enabled\n\n"
-                    f"   To fix:\n"
-                    f"   - Get LIVE keys from: https://app.alpaca.markets/dashboard/overview\n"
-                    f"   - Update config.py with LIVE API keys\n"
-                    f"   - Or use paper trading: Remove --live flag"
-                )
-            else:
-                raise ConnectionError(
-                    f"❌ Authentication failed for PAPER trading:\n"
-                    f"   Error: {error_msg}\n"
-                    f"   Please check your API keys in config.py"
-                )
         raise ConnectionError(f"Failed to connect to Alpaca: {e}")
 
 # ==================== MODEL LOADING ====================
@@ -520,7 +444,7 @@ def estimate_premium(price: float, strike: float, option_type: str) -> float:
     
     return max(0.01, premium)
 
-def check_stop_losses(api: tradeapi.REST, risk_mgr: RiskManager, current_price: float, trade_db=None) -> None:
+def check_stop_losses(api: tradeapi.REST, risk_mgr: RiskManager, current_price: float) -> None:
     """
     Check all open positions for volatility-adjusted stop-loss and take-profit triggers
     Uses CORRECT Alpaca v2 API: list_positions() and get_option_snapshot()
@@ -541,84 +465,11 @@ def check_stop_losses(api: tradeapi.REST, risk_mgr: RiskManager, current_price: 
     # Get actual positions from Alpaca (CORRECT API)
     try:
         alpaca_positions = api.list_positions()
-        # Filter to only option positions (Alpaca uses 'us_option' for options)
-        alpaca_option_positions = {pos.symbol: pos for pos in alpaca_positions if pos.asset_class in ['option', 'us_option'] or ('C' in pos.symbol[-9:] or 'P' in pos.symbol[-9:])}
+        # Filter to only option positions
+        alpaca_option_positions = {pos.symbol: pos for pos in alpaca_positions if pos.asset_class == 'option'}
     except Exception as e:
         risk_mgr.log(f"Error fetching positions from Alpaca: {e}", "ERROR")
         alpaca_option_positions = {}
-    
-    # First, sync any Alpaca positions that aren't being tracked
-    for symbol, alpaca_pos in alpaca_option_positions.items():
-        if symbol not in risk_mgr.open_positions:
-            # Position exists in Alpaca but not tracked - add it
-            try:
-                # Extract strike from symbol (format: SPY251204C00683000)
-                if len(symbol) >= 15:
-                    strike_str = symbol[-9:-1]  # Last 9 chars before last char
-                    strike = float(strike_str) / 1000
-                    option_type = 'call' if 'C' in symbol[-9:] else 'put'
-                else:
-                    strike = current_price
-                    option_type = 'call'
-                
-                # Get actual entry premium from Alpaca position
-                # Alpaca provides avg_entry_price (already in premium format for options, NOT multiplied by 100)
-                try:
-                    # Try to get avg_entry_price - for options, this is already the premium per share
-                    if hasattr(alpaca_pos, 'avg_entry_price') and alpaca_pos.avg_entry_price:
-                        # avg_entry_price for options is already the premium (e.g., 0.8994, not 89.94)
-                        entry_premium = float(alpaca_pos.avg_entry_price)
-                    elif hasattr(alpaca_pos, 'cost_basis') and alpaca_pos.cost_basis and float(alpaca_pos.qty) > 0:
-                        # Calculate from cost_basis: cost_basis / (qty * 100) for options
-                        entry_premium = abs(float(alpaca_pos.cost_basis) / (float(alpaca_pos.qty) * 100))
-                    else:
-                        # Fallback: use current premium as worst case (assume we're at break-even or loss)
-                        # This is conservative - will trigger stop-loss if needed
-                        try:
-                            snapshot = api.get_option_snapshot(symbol)
-                            if snapshot.bid_price and snapshot.bid_price > 0:
-                                entry_premium = float(snapshot.bid_price)  # Use current as entry (conservative)
-                            else:
-                                entry_premium = abs(float(alpaca_pos.market_value) / float(alpaca_pos.qty)) if float(alpaca_pos.qty) > 0 else estimate_premium(current_price, strike, option_type)
-                        except:
-                            entry_premium = abs(float(alpaca_pos.market_value) / float(alpaca_pos.qty)) if float(alpaca_pos.qty) > 0 else estimate_premium(current_price, strike, option_type)
-                except Exception as e:
-                    risk_mgr.log(f"Error getting entry premium for {symbol}: {e}, using estimate", "WARNING")
-                    entry_premium = estimate_premium(current_price, strike, option_type)
-                
-                # Get current premium (CORRECT: market_value / (qty * 100) for options)
-                try:
-                    if alpaca_pos.market_value and float(alpaca_pos.qty) > 0:
-                        # market_value is total value, qty is contracts, each contract is 100 shares
-                        current_premium = abs(float(alpaca_pos.market_value) / (float(alpaca_pos.qty) * 100))
-                    else:
-                        current_premium = entry_premium
-                except:
-                    current_premium = abs(float(alpaca_pos.market_value) / (float(alpaca_pos.qty) * 100)) if float(alpaca_pos.qty) > 0 else entry_premium
-                
-                risk_mgr.open_positions[symbol] = {
-                    'strike': strike,
-                    'type': option_type,
-                    'entry_time': datetime.now(),
-                    'contracts': int(float(alpaca_pos.qty)),
-                    'qty_remaining': int(float(alpaca_pos.qty)),
-                    'notional': int(float(alpaca_pos.qty)) * strike * 100,
-                    'entry_premium': entry_premium,  # Actual entry from Alpaca
-                    'entry_price': current_price,
-                    'trail_active': False,
-                    'trail_price': 0.0,
-                    'peak_premium': current_premium,
-                    'tp1_done': False,
-                    'tp2_done': False,
-                    'tp3_done': False,
-                    'tp4_done': False,
-                    'tp5_done': False,
-                    'vol_regime': current_regime,
-                    'entry_vix': risk_mgr.get_current_vix()
-                }
-                risk_mgr.log(f"Synced untracked position: {symbol} ({int(float(alpaca_pos.qty))} contracts @ ${strike:.2f} strike)", "INFO")
-            except Exception as e:
-                risk_mgr.log(f"Error syncing position {symbol}: {e}", "WARNING")
     
     # Check tracked positions against actual Alpaca positions
     for symbol, pos_data in list(risk_mgr.open_positions.items()):
@@ -637,39 +488,24 @@ def check_stop_losses(api: tradeapi.REST, risk_mgr: RiskManager, current_price: 
             entry_params = risk_mgr.get_vol_params(entry_regime)
             
             # For take-profits, use current regime (adapt to market)
-            # For stop-losses, ALWAYS use fixed -15% (not volatility-adjusted)
+            # For stop-losses, use entry regime (protect from widening)
             tp_params = vol_params  # Use current regime for TP
-            # Stop-loss is now FIXED at -15% regardless of regime
+            sl_params = entry_params  # Use entry regime for SL
             
-            # ALWAYS update entry_premium from Alpaca (most accurate source)
-            # This ensures we use Alpaca's actual avg_entry_price, not an estimate
+            # Get current premium from Alpaca snapshot (CORRECT API)
             try:
-                if hasattr(alpaca_pos, 'avg_entry_price') and alpaca_pos.avg_entry_price:
-                    alpaca_entry = float(alpaca_pos.avg_entry_price)
-                    # Update entry_premium if it's different (to ensure accuracy)
-                    if abs(alpaca_entry - pos_data['entry_premium']) > 0.001:
-                        risk_mgr.log(f"Updating entry_premium for {symbol}: ${pos_data['entry_premium']:.4f} → ${alpaca_entry:.4f} (from Alpaca)", "INFO")
-                        pos_data['entry_premium'] = alpaca_entry
-                elif hasattr(alpaca_pos, 'cost_basis') and alpaca_pos.cost_basis and float(alpaca_pos.qty) > 0:
-                    alpaca_entry = abs(float(alpaca_pos.cost_basis) / (float(alpaca_pos.qty) * 100))
-                    if abs(alpaca_entry - pos_data['entry_premium']) > 0.001:
-                        risk_mgr.log(f"Updating entry_premium for {symbol}: ${pos_data['entry_premium']:.4f} → ${alpaca_entry:.4f} (from cost_basis)", "INFO")
-                        pos_data['entry_premium'] = alpaca_entry
-            except Exception as e:
-                risk_mgr.log(f"Error updating entry_premium for {symbol}: {e}", "WARNING")
-            
-            # Get current premium from Alpaca position (most reliable)
-            # Use market_value / (qty * 100) for options (market_value is total, qty is contracts)
-            try:
-                if alpaca_pos.market_value and float(alpaca_pos.qty) > 0:
-                    # market_value is total value, qty is contracts, each contract is 100 shares
-                    current_premium = abs(float(alpaca_pos.market_value) / (float(alpaca_pos.qty) * 100))
+                snapshot = api.get_option_snapshot(symbol)
+                # Use bid price if available, otherwise use market value / qty
+                if snapshot.bid_price and snapshot.bid_price > 0:
+                    current_premium = float(snapshot.bid_price)
+                elif alpaca_pos.market_value and float(alpaca_pos.qty) > 0:
+                    current_premium = abs(float(alpaca_pos.market_value) / float(alpaca_pos.qty))
                 else:
-                    # Fallback to estimate if market_value not available
+                    # Fallback to estimate
                     current_premium = estimate_premium(current_price, pos_data['strike'], pos_data['type'])
             except Exception as e:
-                # Fallback to estimate if calculation fails
-                risk_mgr.log(f"Error calculating current premium for {symbol}: {e}, using estimate", "WARNING")
+                # Fallback to estimate if snapshot fails
+                risk_mgr.log(f"Error getting snapshot for {symbol}: {e}, using estimate", "WARNING")
                 current_premium = estimate_premium(current_price, pos_data['strike'], pos_data['type'])
             
             # Update peak premium
@@ -689,230 +525,19 @@ def check_stop_losses(api: tradeapi.REST, risk_mgr: RiskManager, current_price: 
                 pos_data['qty_remaining'] = actual_qty
                 qty_remaining = actual_qty
             
-            # ========== FIXED STOP-LOSS (-15% ALWAYS) - CHECK FIRST ==========
-            # Stop-loss must be checked BEFORE take-profits to prevent larger losses
-            # Log P&L for debugging
-            risk_mgr.log(f"Position {symbol}: Entry=${pos_data['entry_premium']:.4f} | Current=${current_premium:.4f} | P&L={pnl_pct:.2%}", "INFO")
-            
-            if pnl_pct <= FIXED_STOP_LOSS:
-                risk_mgr.log(f"🚨 STOP-LOSS TRIGGERED (-15% FIXED): {symbol} @ {pnl_pct:.1%} → FORCED EXIT", "CRITICAL")
-                
-                # Log trade to database
-                if trade_db:
-                    capital_before = risk_mgr.get_equity(api)
-                    pnl_dollar = (current_premium - pos_data['entry_premium']) * qty_remaining * 100
-                    trade_db.log_trade(
-                        symbol=symbol,
-                        action='SELL',
-                        qty=qty_remaining,
-                        price=current_premium,
-                        strike=pos_data['strike'],
-                        option_type=pos_data['type'],
-                        entry_premium=pos_data['entry_premium'],
-                        exit_premium=current_premium,
-                        pnl=pnl_dollar,
-                        pnl_pct=pnl_pct,
-                        capital_before=capital_before,
-                        capital_after=capital_before + pnl_dollar,
-                        reason='STOP_LOSS',
-                        regime=entry_regime,
-                        vix=risk_mgr.get_current_vix()
-                    )
-                
-                positions_to_close.append(symbol)
-                continue  # Exit immediately, don't check take-profits
-            
-            # ========== NEW 5-TIER TAKE-PROFIT SYSTEM ==========
-            # TP1 at +40%: Sell 50% of position
-            # TP2 at +60%: Sell 20% of remaining
-            # TP3 at +100%: Sell 10% of remaining
-            # TP4 at +150%: Sell 10% of remaining
-            # TP5 at +200%: Full exit
-            # Trailing Stop: Activates after TP4, locks in +100% minimum
-            
-            # ========== TP5: +200% - FULL EXIT ==========
-            if pnl_pct >= tp_params['tp5'] and not pos_data.get('tp5_done', False):
+            # ========== VOLATILITY-ADJUSTED TAKE-PROFIT TIER 3 ==========
+            if pnl_pct >= tp_params['tp3'] and not pos_data.get('tp3_done', False):
                 try:
                     api.close_position(symbol)
-                    risk_mgr.log(f"🎯 TP5 +{tp_params['tp5']:.0%} HIT ({current_regime.upper()}) → FULL EXIT: {symbol} @ {pnl_pct:.1%}", "TRADE")
-                    
-                    # Log trade to database
-                    if trade_db:
-                        capital_before = risk_mgr.get_equity(api)
-                        pnl_dollar = (current_premium - pos_data['entry_premium']) * qty_remaining * 100
-                        trade_db.log_trade(
-                            symbol=symbol,
-                            action='SELL',
-                            qty=qty_remaining,
-                            price=current_premium,
-                            strike=pos_data['strike'],
-                            option_type=pos_data['type'],
-                            entry_premium=pos_data['entry_premium'],
-                            exit_premium=current_premium,
-                            pnl=pnl_dollar,
-                            pnl_pct=pnl_pct,
-                            capital_before=capital_before,
-                            capital_after=capital_before + pnl_dollar,
-                            reason='TP5',
-                            regime=current_regime,
-                            vix=risk_mgr.get_current_vix()
-                        )
-                    
+                    risk_mgr.log(f"🎯 TP3 +{tp_params['tp3']:.0%} HIT ({current_regime.upper()}) → FULL EXIT: {symbol} @ {pnl_pct:.1%}", "TRADE")
                     positions_to_close.append(symbol)
                     continue
                 except Exception as e:
-                    risk_mgr.log(f"✗ Error executing TP5 exit for {symbol}: {e}", "ERROR")
+                    risk_mgr.log(f"✗ Error executing TP3 exit for {symbol}: {e}", "ERROR")
             
-            # ========== TP4: +150% - Sell 10% of remaining ==========
-            elif pnl_pct >= tp_params['tp4'] and not pos_data.get('tp4_done', False):
-                sell_qty = max(1, int(qty_remaining * 0.10))  # Sell 10% of remaining
-                if sell_qty < qty_remaining:
-                    try:
-                        api.submit_order(
-                            symbol=symbol,
-                            qty=sell_qty,
-                            side='sell',
-                            type='market',
-                            time_in_force='day'
-                        )
-                        pos_data['qty_remaining'] = qty_remaining - sell_qty
-                        pos_data['tp4_done'] = True
-                        # Activate trailing stop after TP4
-                        pos_data['trail_active'] = True
-                        pos_data['trail_price'] = pos_data['entry_premium'] * (1 + tp_params['trail'])  # Lock in +100%
-                        risk_mgr.log(f"🎯 TP4 +{tp_params['tp4']:.0%} ({current_regime.upper()}) → SOLD 10% ({sell_qty}x) | Remaining: {pos_data['qty_remaining']} | Trail activated at +{tp_params['trail']:.0%}", "TRADE")
-                        
-                        # Log trade to database
-                        if trade_db:
-                            capital_before = risk_mgr.get_equity(api)
-                            pnl_dollar = (current_premium - pos_data['entry_premium']) * sell_qty * 100
-                            trade_db.log_trade(
-                                symbol=symbol,
-                                action='SELL',
-                                qty=sell_qty,
-                                price=current_premium,
-                                strike=pos_data['strike'],
-                                option_type=pos_data['type'],
-                                entry_premium=pos_data['entry_premium'],
-                                exit_premium=current_premium,
-                                pnl=pnl_dollar,
-                                pnl_pct=pnl_pct,
-                                capital_before=capital_before,
-                                capital_after=capital_before + pnl_dollar,
-                                reason='TP4',
-                                regime=current_regime,
-                                vix=risk_mgr.get_current_vix()
-                            )
-                    except Exception as e:
-                        risk_mgr.log(f"✗ Error executing TP4 for {symbol}: {e}", "ERROR")
-                else:
-                    # If 10% is all remaining, just close
-                    try:
-                        api.close_position(symbol)
-                        risk_mgr.log(f"🎯 TP4 +{tp_params['tp4']:.0%} ({current_regime.upper()}) → FULL EXIT: {symbol} @ {pnl_pct:.1%}", "TRADE")
-                        
-                        # Log trade to database
-                        if trade_db:
-                            capital_before = risk_mgr.get_equity(api)
-                            pnl_dollar = (current_premium - pos_data['entry_premium']) * qty_remaining * 100
-                            trade_db.log_trade(
-                                symbol=symbol,
-                                action='SELL',
-                                qty=qty_remaining,
-                                price=current_premium,
-                                strike=pos_data['strike'],
-                                option_type=pos_data['type'],
-                                entry_premium=pos_data['entry_premium'],
-                                exit_premium=current_premium,
-                                pnl=pnl_dollar,
-                                pnl_pct=pnl_pct,
-                                capital_before=capital_before,
-                                capital_after=capital_before + pnl_dollar,
-                                reason='TP4_FULL',
-                                regime=current_regime,
-                                vix=risk_mgr.get_current_vix()
-                            )
-                        
-                        positions_to_close.append(symbol)
-                        continue
-                    except Exception as e:
-                        risk_mgr.log(f"✗ Error closing at TP4: {e}", "ERROR")
-            
-            # ========== TP3: +100% - Sell 10% of remaining ==========
-            elif pnl_pct >= tp_params['tp3'] and not pos_data.get('tp3_done', False):
-                sell_qty = max(1, int(qty_remaining * 0.10))  # Sell 10% of remaining
-                if sell_qty < qty_remaining:
-                    try:
-                        api.submit_order(
-                            symbol=symbol,
-                            qty=sell_qty,
-                            side='sell',
-                            type='market',
-                            time_in_force='day'
-                        )
-                        pos_data['qty_remaining'] = qty_remaining - sell_qty
-                        pos_data['tp3_done'] = True
-                        risk_mgr.log(f"🎯 TP3 +{tp_params['tp3']:.0%} ({current_regime.upper()}) → SOLD 10% ({sell_qty}x) | Remaining: {pos_data['qty_remaining']}", "TRADE")
-                        
-                        # Log trade to database
-                        if trade_db:
-                            capital_before = risk_mgr.get_equity(api)
-                            pnl_dollar = (current_premium - pos_data['entry_premium']) * sell_qty * 100
-                            trade_db.log_trade(
-                                symbol=symbol,
-                                action='SELL',
-                                qty=sell_qty,
-                                price=current_premium,
-                                strike=pos_data['strike'],
-                                option_type=pos_data['type'],
-                                entry_premium=pos_data['entry_premium'],
-                                exit_premium=current_premium,
-                                pnl=pnl_dollar,
-                                pnl_pct=pnl_pct,
-                                capital_before=capital_before,
-                                capital_after=capital_before + pnl_dollar,
-                                reason='TP3',
-                                regime=current_regime,
-                                vix=risk_mgr.get_current_vix()
-                            )
-                    except Exception as e:
-                        risk_mgr.log(f"✗ Error executing TP3 for {symbol}: {e}", "ERROR")
-                else:
-                    # If 10% is all remaining, just close
-                    try:
-                        api.close_position(symbol)
-                        risk_mgr.log(f"🎯 TP3 +{tp_params['tp3']:.0%} ({current_regime.upper()}) → FULL EXIT: {symbol} @ {pnl_pct:.1%}", "TRADE")
-                        
-                        # Log trade to database
-                        if trade_db:
-                            capital_before = risk_mgr.get_equity(api)
-                            pnl_dollar = (current_premium - pos_data['entry_premium']) * qty_remaining * 100
-                            trade_db.log_trade(
-                                symbol=symbol,
-                                action='SELL',
-                                qty=qty_remaining,
-                                price=current_premium,
-                                strike=pos_data['strike'],
-                                option_type=pos_data['type'],
-                                entry_premium=pos_data['entry_premium'],
-                                exit_premium=current_premium,
-                                pnl=pnl_dollar,
-                                pnl_pct=pnl_pct,
-                                capital_before=capital_before,
-                                capital_after=capital_before + pnl_dollar,
-                                reason='TP3_FULL',
-                                regime=current_regime,
-                                vix=risk_mgr.get_current_vix()
-                            )
-                        
-                        positions_to_close.append(symbol)
-                        continue
-                    except Exception as e:
-                        risk_mgr.log(f"✗ Error closing at TP3: {e}", "ERROR")
-            
-            # ========== TP2: +60% - Sell 20% of remaining ==========
+            # ========== VOLATILITY-ADJUSTED TAKE-PROFIT TIER 2 ==========
             elif pnl_pct >= tp_params['tp2'] and not pos_data.get('tp2_done', False):
-                sell_qty = max(1, int(qty_remaining * 0.20))  # Sell 20% of remaining
+                sell_qty = max(1, int(qty_remaining * 0.3))  # Sell 30% of remaining
                 if sell_qty < qty_remaining:
                     try:
                         api.submit_order(
@@ -924,77 +549,26 @@ def check_stop_losses(api: tradeapi.REST, risk_mgr: RiskManager, current_price: 
                         )
                         pos_data['qty_remaining'] = qty_remaining - sell_qty
                         pos_data['tp2_done'] = True
-                        risk_mgr.log(f"🎯 TP2 +{tp_params['tp2']:.0%} ({current_regime.upper()}) → SOLD 20% ({sell_qty}x) | Remaining: {pos_data['qty_remaining']}", "TRADE")
-                        
-                        # Log trade to database
-                        if trade_db:
-                            capital_before = risk_mgr.get_equity(api)
-                            pnl_dollar = (current_premium - pos_data['entry_premium']) * sell_qty * 100
-                            trade_db.log_trade(
-                                symbol=symbol,
-                                action='SELL',
-                                qty=sell_qty,
-                                price=current_premium,
-                                strike=pos_data['strike'],
-                                option_type=pos_data['type'],
-                                entry_premium=pos_data['entry_premium'],
-                                exit_premium=current_premium,
-                                pnl=pnl_dollar,
-                                pnl_pct=pnl_pct,
-                                capital_before=capital_before,
-                                capital_after=capital_before + pnl_dollar,
-                                reason='TP2',
-                                regime=current_regime,
-                                vix=risk_mgr.get_current_vix()
-                            )
+                        pos_data['trail_active'] = True
+                        pos_data['trail_price'] = pos_data['entry_premium'] * (1 + tp_params['trail'])
+                        risk_mgr.log(f"🎯 TP2 +{tp_params['tp2']:.0%} ({current_regime.upper()}) → SOLD 30% ({sell_qty}x) | Remaining: {pos_data['qty_remaining']} | Trail at +{tp_params['trail']:.0%}", "TRADE")
                     except Exception as e:
                         risk_mgr.log(f"✗ Error executing TP2 for {symbol}: {e}", "ERROR")
                 else:
-                    # If 20% is all remaining, just close
+                    # If 30% is all remaining, just close
                     try:
                         api.close_position(symbol)
                         risk_mgr.log(f"🎯 TP2 +{tp_params['tp2']:.0%} ({current_regime.upper()}) → FULL EXIT: {symbol} @ {pnl_pct:.1%}", "TRADE")
-                        
-                        # Log trade to database
-                        if trade_db:
-                            capital_before = risk_mgr.get_equity(api)
-                            pnl_dollar = (current_premium - pos_data['entry_premium']) * qty_remaining * 100
-                            trade_db.log_trade(
-                                symbol=symbol,
-                                action='SELL',
-                                qty=qty_remaining,
-                                price=current_premium,
-                                strike=pos_data['strike'],
-                                option_type=pos_data['type'],
-                                entry_premium=pos_data['entry_premium'],
-                                exit_premium=current_premium,
-                                pnl=pnl_dollar,
-                                pnl_pct=pnl_pct,
-                                capital_before=capital_before,
-                                capital_after=capital_before + pnl_dollar,
-                                reason='TP2_FULL',
-                                regime=current_regime,
-                                vix=risk_mgr.get_current_vix()
-                            )
-                        
                         positions_to_close.append(symbol)
                         continue
                     except Exception as e:
                         risk_mgr.log(f"✗ Error closing at TP2: {e}", "ERROR")
             
-            # ========== TP1: +40% - Sell 50% of position ==========
+            # ========== VOLATILITY-ADJUSTED TAKE-PROFIT TIER 1 ==========
             elif pnl_pct >= tp_params['tp1'] and not pos_data.get('tp1_done', False):
-                # CRITICAL: Always sell 50% using submit_order, NEVER close_position for TP1
-                # Calculate 50% of current remaining quantity
-                sell_qty = max(1, int(qty_remaining * 0.5))  # Sell 50% of position
-                
-                # Ensure we don't sell more than remaining (safety check)
-                sell_qty = min(sell_qty, qty_remaining)
-                
-                # Only proceed if we have more than 1 contract (so we can sell partial)
-                if qty_remaining > 1 and sell_qty < qty_remaining:
+                sell_qty = max(1, int(qty_remaining * 0.5))  # Sell 50% of remaining
+                if sell_qty < qty_remaining:
                     try:
-                        # Use submit_order to sell PARTIAL position (50%)
                         api.submit_order(
                             symbol=symbol,
                             qty=sell_qty,
@@ -1004,108 +578,54 @@ def check_stop_losses(api: tradeapi.REST, risk_mgr: RiskManager, current_price: 
                         )
                         pos_data['qty_remaining'] = qty_remaining - sell_qty
                         pos_data['tp1_done'] = True
-                        risk_mgr.log(f"🎯 TP1 +{tp_params['tp1']:.0%} ({current_regime.upper()}) → SOLD 50% ({sell_qty}x of {qty_remaining}) | Remaining: {pos_data['qty_remaining']}", "TRADE")
-                        
-                        # Log trade to database
-                        if trade_db:
-                            capital_before = risk_mgr.get_equity(api)
-                            pnl_dollar = (current_premium - pos_data['entry_premium']) * sell_qty * 100
-                            trade_db.log_trade(
-                                symbol=symbol,
-                                action='SELL',
-                                qty=sell_qty,
-                                price=current_premium,
-                                strike=pos_data['strike'],
-                                option_type=pos_data['type'],
-                                entry_premium=pos_data['entry_premium'],
-                                exit_premium=current_premium,
-                                pnl=pnl_dollar,
-                                pnl_pct=pnl_pct,
-                                capital_before=capital_before,
-                                capital_after=capital_before + pnl_dollar,
-                                reason='TP1',
-                                regime=current_regime,
-                                vix=risk_mgr.get_current_vix()
-                            )
-                        # Continue to next position - don't check other TPs in same cycle
+                        risk_mgr.log(f"🎯 TP1 +{tp_params['tp1']:.0%} ({current_regime.upper()}) → SOLD 50% ({sell_qty}x) | Remaining: {pos_data['qty_remaining']}", "TRADE")
+                    except Exception as e:
+                        risk_mgr.log(f"✗ Error executing TP1 for {symbol}: {e}", "ERROR")
+                else:
+                    # If 50% is all remaining, just close
+                    try:
+                        api.close_position(symbol)
+                        risk_mgr.log(f"🎯 TP1 +{tp_params['tp1']:.0%} ({current_regime.upper()}) → FULL EXIT: {symbol} @ {pnl_pct:.1%}", "TRADE")
+                        positions_to_close.append(symbol)
                         continue
                     except Exception as e:
-                        risk_mgr.log(f"✗ Error executing TP1 partial sell for {symbol}: {e}", "ERROR")
-                elif qty_remaining == 1:
-                    # Only 1 contract left - can't sell 50%, so skip TP1 (will hit TP2/TP3/etc later)
-                    risk_mgr.log(f"⚠️ TP1 +{tp_params['tp1']:.0%} reached but only 1 contract remaining - skipping TP1, will trigger at next TP level", "INFO")
-                    pos_data['tp1_done'] = True  # Mark as done so we don't keep checking
-                else:
-                    # Edge case: qty_remaining calculation issue
-                    risk_mgr.log(f"⚠️ TP1 calculation issue: qty_remaining={qty_remaining}, sell_qty={sell_qty} - skipping", "WARNING")
-                    pos_data['tp1_done'] = True  # Mark as done to prevent infinite loop
+                        risk_mgr.log(f"✗ Error closing at TP1: {e}", "ERROR")
             
-            # ========== TRAILING STOP AFTER TP4 (+100% minimum) ==========
-            if pos_data.get('trail_active', False) and pos_data.get('tp4_done', False):
+            # ========== TRAILING STOP AFTER TP2 (+60% minimum) ==========
+            if pos_data.get('trail_active', False) and pos_data.get('tp2_done', False):
                 if current_premium <= pos_data.get('trail_price', 0):
                     try:
                         api.close_position(symbol)
                         trail_pct = tp_params['trail']
                         risk_mgr.log(f"📉 TRAILING STOP HIT ({current_regime.upper()}, +{trail_pct:.0%}): {symbol} @ ${current_premium:.2f} → Locked profit", "TRADE")
-                        
-                        # Log trade to database
-                        if trade_db:
-                            capital_before = risk_mgr.get_equity(api)
-                            pnl_dollar = (current_premium - pos_data['entry_premium']) * qty_remaining * 100
-                            trade_db.log_trade(
-                                symbol=symbol,
-                                action='SELL',
-                                qty=qty_remaining,
-                                price=current_premium,
-                                strike=pos_data['strike'],
-                                option_type=pos_data['type'],
-                                entry_premium=pos_data['entry_premium'],
-                                exit_premium=current_premium,
-                                pnl=pnl_dollar,
-                                pnl_pct=pnl_pct,
-                                capital_before=capital_before,
-                                capital_after=capital_before + pnl_dollar,
-                                reason='TRAILING_STOP',
-                                regime=current_regime,
-                                vix=risk_mgr.get_current_vix()
-                            )
-                        
                         positions_to_close.append(symbol)
                         continue
                     except Exception as e:
                         risk_mgr.log(f"✗ Error executing trailing stop: {e}", "ERROR")
             
-            # Stop-loss already checked at the top - this section removed to avoid duplication
+            # ========== VOLATILITY-ADJUSTED HARD STOP-LOSS ==========
+            if pnl_pct <= sl_params['hard_sl']:
+                risk_mgr.log(f"🚨 HARD STOP-LOSS TRIGGERED ({entry_regime.upper()}, {sl_params['hard_sl']:.0%}): {symbol} @ {pnl_pct:.1%} → FORCED EXIT", "CRITICAL")
+                positions_to_close.append(symbol)
+                continue
             
-            # ========== TRAILING STOP CHECK (after TP4 activation) ==========
-            # Trailing stop is activated at TP4, locks in +100% minimum
-            if pos_data.get('trail_active', False) and pos_data.get('tp4_done', False):
-                if current_premium <= pos_data.get('trail_price', 0):
+            # ========== VOLATILITY-ADJUSTED NORMAL STOP-LOSS - Only if TP1 not hit ==========
+            if pnl_pct <= sl_params['sl'] and not pos_data.get('tp1_done', False) and not pos_data.get('trail_active', False):
+                risk_mgr.log(f"🛑 STOP-LOSS EXIT ({entry_regime.upper()}, {sl_params['sl']:.0%}): {symbol} @ {pnl_pct:.1%}", "TRADE")
+                positions_to_close.append(symbol)
+                continue
+            
+            # ========== VOLATILITY-ADJUSTED TRAILING STOP ACTIVATION ==========
+            if pnl_pct >= tp_params['trail_activate'] and not pos_data.get('trail_active', False) and not pos_data.get('tp2_done', False):
+                pos_data['trail_active'] = True
+                pos_data['trail_price'] = pos_data['entry_premium'] * (1 + tp_params['trail'])
+                risk_mgr.log(f"📈 TRAILING STOP ACTIVATED ({current_regime.upper()}, +{tp_params['trail_activate']:.0%} → Trail at +{tp_params['trail']:.0%}): {symbol} @ {pnl_pct:.1%}", "TRADE")
+            
+            # ========== VOLATILITY-ADJUSTED TRAILING STOP CHECK (before TP2) ==========
+            if pos_data.get('trail_active', False) and not pos_data.get('tp2_done', False):
+                if current_premium <= pos_data['trail_price']:
                     trail_pct = tp_params['trail']
-                    risk_mgr.log(f"📉 TRAILING STOP HIT ({current_regime.upper()}, +{trail_pct:.0%} minimum): {symbol} @ ${current_premium:.2f} (trail: ${pos_data['trail_price']:.2f})", "TRADE")
-                    
-                    # Log trade to database
-                    if trade_db:
-                        capital_before = risk_mgr.get_equity(api)
-                        pnl_dollar = (current_premium - pos_data['entry_premium']) * qty_remaining * 100
-                        trade_db.log_trade(
-                            symbol=symbol,
-                            action='SELL',
-                            qty=qty_remaining,
-                            price=current_premium,
-                            strike=pos_data['strike'],
-                            option_type=pos_data['type'],
-                            entry_premium=pos_data['entry_premium'],
-                            exit_premium=current_premium,
-                            pnl=pnl_dollar,
-                            pnl_pct=pnl_pct,
-                            capital_before=capital_before,
-                            capital_after=capital_before + pnl_dollar,
-                            reason='TRAILING_STOP',
-                            regime=current_regime,
-                            vix=risk_mgr.get_current_vix()
-                        )
-                    
+                    risk_mgr.log(f"📉 TRAILING STOP HIT ({current_regime.upper()}, +{trail_pct:.0%}): {symbol} @ ${current_premium:.2f} (trail: ${pos_data['trail_price']:.2f})", "TRADE")
                     positions_to_close.append(symbol)
                     continue
             
@@ -1115,29 +635,6 @@ def check_stop_losses(api: tradeapi.REST, risk_mgr: RiskManager, current_price: 
                 # Would need bar data - simplified check
                 if current_price < pos_data['entry_price'] * 0.99:  # 1% rejection
                     risk_mgr.log(f"⚠️ REJECTION DETECTED: {symbol} → Exit", "TRADE")
-                    
-                    # Log trade to database
-                    if trade_db:
-                        capital_before = risk_mgr.get_equity(api)
-                        pnl_dollar = (current_premium - pos_data['entry_premium']) * qty_remaining * 100
-                        trade_db.log_trade(
-                            symbol=symbol,
-                            action='SELL',
-                            qty=qty_remaining,
-                            price=current_premium,
-                            strike=pos_data['strike'],
-                            option_type=pos_data['type'],
-                            entry_premium=pos_data['entry_premium'],
-                            exit_premium=current_premium,
-                            pnl=pnl_dollar,
-                            pnl_pct=pnl_pct,
-                            capital_before=capital_before,
-                            capital_after=capital_before + pnl_dollar,
-                            reason='REJECTION',
-                            regime=current_regime,
-                            vix=risk_mgr.get_current_vix()
-                        )
-                    
                     positions_to_close.append(symbol)
                     continue
             
@@ -1150,44 +647,6 @@ def check_stop_losses(api: tradeapi.REST, risk_mgr: RiskManager, current_price: 
             # Use close_position() which works correctly
             api.close_position(symbol)
             risk_mgr.log(f"✓ Position closed: {symbol}", "TRADE")
-            
-            # Log final close if not already logged above
-            if trade_db and symbol in risk_mgr.open_positions:
-                pos_data = risk_mgr.open_positions[symbol]
-                try:
-                    # Try to get current premium from Alpaca
-                    alpaca_positions = api.list_positions()
-                    alpaca_pos = next((p for p in alpaca_positions if p.symbol == symbol), None)
-                    if alpaca_pos:
-                        current_premium = abs(float(alpaca_pos.market_value) / (float(alpaca_pos.qty) * 100)) if float(alpaca_pos.qty) > 0 else pos_data['entry_premium']
-                    else:
-                        current_premium = pos_data['entry_premium']
-                    
-                    pnl_pct = (current_premium - pos_data['entry_premium']) / pos_data['entry_premium']
-                    qty_remaining = pos_data.get('qty_remaining', pos_data.get('contracts', 0))
-                    pnl_dollar = (current_premium - pos_data['entry_premium']) * qty_remaining * 100
-                    capital_before = risk_mgr.get_equity(api)
-                    
-                    trade_db.log_trade(
-                        symbol=symbol,
-                        action='SELL',
-                        qty=qty_remaining,
-                        price=current_premium,
-                        strike=pos_data['strike'],
-                        option_type=pos_data['type'],
-                        entry_premium=pos_data['entry_premium'],
-                        exit_premium=current_premium,
-                        pnl=pnl_dollar,
-                        pnl_pct=pnl_pct,
-                        capital_before=capital_before,
-                        capital_after=capital_before + pnl_dollar,
-                        reason='CLOSE',
-                        regime=pos_data.get('vol_regime', 'normal_vol'),
-                        vix=pos_data.get('entry_vix', risk_mgr.get_current_vix())
-                    )
-                except Exception as e:
-                    risk_mgr.log(f"Error logging final close for {symbol}: {e}", "WARNING")
-            
             if symbol in risk_mgr.open_positions:
                 del risk_mgr.open_positions[symbol]
         except Exception as e:
@@ -1212,7 +671,7 @@ def check_stop_losses(api: tradeapi.REST, risk_mgr: RiskManager, current_price: 
 
 # ==================== OBSERVATION PREPARATION ====================
 def prepare_observation(data: pd.DataFrame, risk_mgr: RiskManager) -> np.ndarray:
-    """Prepare observation for RL model - must match training format: (20, 5)"""
+    """Prepare observation for RL model"""
     if len(data) < LOOKBACK:
         # Pad with last value
         padding = pd.concat([data.iloc[[-1]]] * (LOOKBACK - len(data)))
@@ -1220,31 +679,27 @@ def prepare_observation(data: pd.DataFrame, risk_mgr: RiskManager) -> np.ndarray
     
     recent = data.tail(LOOKBACK).copy()
     
-    # Model was trained with: open, high, low, close, volume (5 features)
-    # Ensure column names match (case-insensitive)
-    cols = {}
-    for col in recent.columns:
-        col_lower = col.lower()
-        if 'open' in col_lower:
-            cols['open'] = col
-        elif 'high' in col_lower:
-            cols['high'] = col
-        elif 'low' in col_lower:
-            cols['low'] = col
-        elif 'close' in col_lower:
-            cols['close'] = col
-        elif 'volume' in col_lower:
-            cols['volume'] = col
+    # Normalize OHLC
+    ohlc = recent[['Open', 'High', 'Low', 'Close']].values
     
-    # Extract the 5 features in the correct order
-    obs_data = recent[[cols.get('open', 'Open'), 
-                       cols.get('high', 'High'), 
-                       cols.get('low', 'Low'), 
-                       cols.get('close', 'Close'), 
-                       cols.get('volume', 'Volume')]].values
+    # Normalize volume
+    volume = recent['Volume'].values.reshape(-1, 1)
+    if volume.max() > 0:
+        volume = volume / volume.max()
     
-    # Return shape (20, 5) - no batch dimension, matches training
-    return obs_data.astype(np.float32)
+    # VIX approximation
+    vix = np.full((LOOKBACK, 1), 20.0) / 50.0
+    
+    # Position encoding
+    pos = np.full((LOOKBACK, 1), 1 if len(risk_mgr.open_positions) > 0 else 0)
+    
+    # Daily PnL
+    pnl = np.full((LOOKBACK, 1), risk_mgr.daily_pnl)
+    
+    # Combine state
+    state = np.concatenate([ohlc, volume, vix, pos, pnl], axis=1)
+    
+    return state.astype(np.float32).reshape(1, LOOKBACK, 8)
 
 # ==================== MAIN LIVE LOOP ====================
 def run_safe_live_trading():
@@ -1266,20 +721,10 @@ def run_safe_live_trading():
     print(f"  8. Max Notional: ${MAX_NOTIONAL:,}")
     print(f"  9. Duplicate Protection: {DUPLICATE_ORDER_WINDOW}s")
     print(f"  10. Manual Kill Switch: Ctrl+C")
-    print(f"  11. Stop-Loss: FIXED -{abs(FIXED_STOP_LOSS)*100:.0f}% (ALWAYS, regardless of volatility)")
-    print(f"  12. Take-Profit System: TP1 +40% (50%) | TP2 +60% (20%) | TP3 +100% (10%) | TP4 +150% (10%) | TP5 +200% (FULL) | Trail +100% after TP4")
+    print(f"  11. Stop-Losses: -{STOP_LOSS_PCT*100:.0f}% / Hard -{HARD_STOP_LOSS*100:.0f}% / Trailing +{TRAILING_STOP*100:.0f}% after +{TRAILING_ACTIVATE*100:.0f}%")
+    print(f"  12. Take-Profit System: TP1 +{TP1*100:.0f}% (50%) | TP2 +{TP2*100:.0f}% (30%) | TP3 +{TP3*100:.0f}% (20%) | Trail +{TRAIL_AFTER_TP2*100:.0f}% after TP2")
     print(f"  13. Volatility Regime Engine: Calm 10%/30% | Normal 7%/25% | Storm 5%/20% | Crash 3%/15%")
-    print(f"  14. Trading Symbols: {', '.join(TRADING_SYMBOLS)}")
     print("=" * 70)
-    print()
-    
-    # Initialize trade database
-    if TRADE_DB_AVAILABLE:
-        trade_db = MikeAgentTradeDB()
-        print("✅ Trade database initialized - all trades will be logged")
-    else:
-        trade_db = None
-        print("⚠️  Trade database not available - trades will not be logged")
     print()
     
     # Initialize
@@ -1296,7 +741,7 @@ def run_safe_live_trading():
     # Sync positions from Alpaca on startup (CORRECT API)
     try:
         alpaca_positions = api.list_positions()
-        option_positions = [pos for pos in alpaca_positions if pos.asset_class in ['option', 'us_option'] or ('C' in pos.symbol[-9:] or 'P' in pos.symbol[-9:])]
+        option_positions = [pos for pos in alpaca_positions if pos.asset_class == 'option']
         if option_positions:
             risk_mgr.log(f"Found {len(option_positions)} existing option positions in Alpaca, syncing...", "INFO")
             # Get current SPY price for entry_price estimate
@@ -1311,16 +756,10 @@ def run_safe_live_trading():
             
             for pos in option_positions:
                 symbol = pos.symbol
-                # Get entry premium from Alpaca's avg_entry_price (most accurate)
+                # Try to get entry premium from snapshot or estimate
                 try:
-                    # avg_entry_price for options is already the premium per share
-                    if hasattr(pos, 'avg_entry_price') and pos.avg_entry_price:
-                        entry_premium = float(pos.avg_entry_price)
-                    elif hasattr(pos, 'cost_basis') and pos.cost_basis and float(pos.qty) > 0:
-                        # Calculate from cost_basis: cost_basis / (qty * 100)
-                        entry_premium = abs(float(pos.cost_basis) / (float(pos.qty) * 100))
-                    else:
-                        entry_premium = 0.5  # Default estimate
+                    snapshot = api.get_option_snapshot(symbol)
+                    entry_premium = float(snapshot.bid_price) if snapshot.bid_price and snapshot.bid_price > 0 else 0.5
                 except:
                     entry_premium = 0.5  # Default estimate
                 
@@ -1349,8 +788,6 @@ def run_safe_live_trading():
                     'tp1_done': False,
                     'tp2_done': False,
                     'tp3_done': False,
-                    'tp4_done': False,
-                    'tp5_done': False,
                     'vol_regime': risk_mgr.current_regime,
                     'entry_vix': risk_mgr.get_current_vix()
                 }
@@ -1372,14 +809,11 @@ def run_safe_live_trading():
     risk_mgr.log(f"  Risk per trade: {initial_regime_params['risk']:.0%}", "INFO")
     risk_mgr.log(f"  Max position size: {initial_regime_params['max_pct']:.0%} (${initial_max_notional:,.0f} of ${initial_equity:,.2f} equity)", "INFO")
     risk_mgr.log(f"VOLATILITY REGIME ENGINE: Active (adapts everything to VIX)", "INFO")
-    risk_mgr.log(f"  Calm (VIX<18): Risk 10% | Max 30% | SL -15% | TP +40%/+60%/+100%/+150%/+200% | Trail +100% after TP4", "INFO")
-    risk_mgr.log(f"  Normal (18-25): Risk 7% | Max 25% | SL -20% | TP +40%/+60%/+100%/+150%/+200% | Trail +100% after TP4", "INFO")
-    risk_mgr.log(f"  Storm (25-35): Risk 5% | Max 20% | SL -28% | TP +40%/+60%/+100%/+150%/+200% | Trail +100% after TP4", "INFO")
-    risk_mgr.log(f"  Crash (>35): Risk 3% | Max 15% | SL -35% | TP +40%/+60%/+100%/+150%/+200% | Trail +100% after TP4", "INFO")
-    risk_mgr.log(f"NEW 5-TIER TAKE-PROFIT SYSTEM: TP1 +40% (50%) | TP2 +60% (20%) | TP3 +100% (10%) | TP4 +150% (10%) | TP5 +200% (FULL)", "INFO")
-    risk_mgr.log(f"TRAILING STOP: Activates after TP4, locks in +100% minimum profit", "INFO")
-    risk_mgr.log(f"MAX CONCURRENT POSITIONS: {MAX_CONCURRENT}", "INFO")
-    risk_mgr.log(f"14/14 SAFEGUARDS: ACTIVE (11 Risk + 1 Volatility Regime Engine + 1 Dynamic Sizing + 1 New 5-Tier TP)", "INFO")
+    risk_mgr.log(f"  Calm (VIX<18): Risk 10% | Max 30% | SL -15% | TP +30%/+60%/+120% | Trail +50%", "INFO")
+    risk_mgr.log(f"  Normal (18-25): Risk 7% | Max 25% | SL -20% | TP +40%/+80%/+150% | Trail +60%", "INFO")
+    risk_mgr.log(f"  Storm (25-35): Risk 5% | Max 20% | SL -28% | TP +60%/+120%/+250% | Trail +90%", "INFO")
+    risk_mgr.log(f"  Crash (>35): Risk 3% | Max 15% | SL -35% | TP +100%/+200%/+400% | Trail +150%", "INFO")
+    risk_mgr.log(f"13/13 SAFEGUARDS: ACTIVE (11 Risk + 1 Volatility Regime Engine + 1 Dynamic Sizing)", "INFO")
     
     iteration = 0
     
@@ -1388,28 +822,6 @@ def run_safe_live_trading():
             iteration += 1
             
             try:
-                # ========== MARKET HOURS CHECK ==========
-                if not is_market_open():
-                    if iteration % 20 == 0:  # Log every 20th iteration when market is closed
-                        est = pytz.timezone('US/Eastern')
-                        now = datetime.now(est)
-                        market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
-                        if now.weekday() < 5 and now < market_open:
-                            # Before market open today
-                            wait_time = (market_open - now).total_seconds() / 60
-                            risk_mgr.log(f"⏰ Market closed. Waiting for market open in {wait_time:.0f} minutes (9:30 AM EST)", "INFO")
-                        elif now.weekday() >= 5:
-                            # Weekend
-                            days_until_monday = (7 - now.weekday()) % 7
-                            if days_until_monday == 0:
-                                days_until_monday = 1
-                            risk_mgr.log(f"⏰ Weekend. Market opens Monday 9:30 AM EST ({days_until_monday} day{'s' if days_until_monday > 1 else ''})", "INFO")
-                        else:
-                            # After market close
-                            risk_mgr.log(f"⏰ Market closed. Opens tomorrow 9:30 AM EST", "INFO")
-                    time.sleep(60)  # Check every minute when market is closed
-                    continue
-                
                 # ========== SAFEGUARD CHECK ==========
                 can_trade, reason = risk_mgr.check_safeguards(api)
                 
@@ -1439,10 +851,8 @@ def run_safe_live_trading():
                 # Prepare observation
                 obs = prepare_observation(hist, risk_mgr)
                 
-                # RL Decision - model expects (1, 20, 5) for predict
-                # obs is (20, 5), add batch dimension: (1, 20, 5)
-                obs_batch = obs.reshape(1, LOOKBACK, 5)
-                action, _ = model.predict(obs_batch, deterministic=True)
+                # RL Decision
+                action, _ = model.predict(obs, deterministic=True)
                 action = int(action[0])
                 
                 equity = risk_mgr.get_equity(api)
@@ -1457,7 +867,7 @@ def run_safe_live_trading():
                 risk_mgr.log(f"SPY: ${current_price:.2f} | VIX: {current_vix:.1f} ({current_regime.upper()}) | Risk: {regime_params['risk']:.0%} | Max Size: {regime_params['max_pct']:.0%} | Action: {action} | Equity: ${equity:,.2f} | Status: {status} | Daily PnL: {risk_mgr.daily_pnl:.2%}", "INFO")
                 
                 # ========== CHECK STOP-LOSSES ON EXISTING POSITIONS ==========
-                check_stop_losses(api, risk_mgr, current_price, trade_db)
+                check_stop_losses(api, risk_mgr, current_price)
                 
                 # ========== SAFE EXECUTION WITH REGIME-ADAPTIVE POSITION SIZING ==========
                 if action == 1 and len(risk_mgr.open_positions) < MAX_CONCURRENT:  # BUY CALL
@@ -1482,13 +892,11 @@ def run_safe_live_trading():
                     regime_adjusted_qty = max(1, int(risk_dollar / (estimated_premium * 100)))
                     
                     # Calculate max contracts under regime-adjusted limit
-                    # For options, use PREMIUM cost (not strike notional) - this is what you actually pay
                     regime_max_notional = risk_mgr.get_regime_max_notional(api, current_regime)
-                    premium_cost_per_contract = estimated_premium * 100  # Actual cost per contract
-                    regime_max_contracts = int(regime_max_notional / premium_cost_per_contract)
+                    regime_max_contracts = int(regime_max_notional / (strike * 100))
                     
                     if regime_max_contracts < 1:
-                        risk_mgr.log(f"REGIME MAX POSITION SIZE REACHED ({current_regime.upper()}): ${risk_mgr.get_current_exposure():,.0f} / ${regime_max_notional:,.0f} | Premium: ${estimated_premium:.2f} → NO NEW ENTRY", "WARNING")
+                        risk_mgr.log(f"REGIME MAX POSITION SIZE REACHED ({current_regime.upper()}): ${risk_mgr.get_current_exposure():,.0f} / ${regime_max_notional:,.0f} → NO NEW ENTRY", "WARNING")
                         time.sleep(30)
                         continue
                     
@@ -1496,7 +904,7 @@ def run_safe_live_trading():
                     qty = min(regime_adjusted_qty, regime_max_contracts)
                     
                     # Check order safety
-                    is_safe, reason = risk_mgr.check_order_safety(symbol, qty, strike, api, premium=estimated_premium)
+                    is_safe, reason = risk_mgr.check_order_safety(symbol, qty, strike, api)
                     if not is_safe:
                         risk_mgr.log(f"Order blocked: {reason}", "WARNING")
                         time.sleep(30)
@@ -1532,8 +940,6 @@ def run_safe_live_trading():
                             'tp1_done': False,
                             'tp2_done': False,
                             'tp3_done': False,
-                            'tp4_done': False,
-                            'tp5_done': False,
                             'vol_regime': entry_regime,  # Store regime at entry
                             'entry_vix': entry_vix
                         }
@@ -1541,24 +947,6 @@ def run_safe_live_trading():
                         current_exposure = risk_mgr.get_current_exposure()
                         max_notional = risk_mgr.get_current_max_notional(api)
                         risk_mgr.log(f"✓ EXECUTED: BUY {qty}x {symbol} (CALL) @ ${strike:.2f} | {current_regime.upper()} REGIME | Risk: {regime_risk:.0%} | Max Size: {regime_params['max_pct']:.0%} | Notional: ${notional:,.0f} | Exposure: ${current_exposure:,.0f}/{regime_max_notional:,.0f}", "TRADE")
-                        
-                        # Log trade to database
-                        if trade_db:
-                            capital_before = risk_mgr.get_equity(api)
-                            trade_db.log_trade(
-                                symbol=symbol,
-                                action='BUY',
-                                qty=qty,
-                                price=strike,
-                                strike=strike,
-                                option_type='call',
-                                entry_premium=entry_premium,
-                                capital_before=capital_before,
-                                capital_after=capital_before,  # Will update on exit
-                                reason='ENTRY',
-                                regime=current_regime,
-                                vix=entry_vix
-                            )
                     except Exception as e:
                         risk_mgr.log(f"✗ Order failed: {e}", "ERROR")
                 
@@ -1584,13 +972,11 @@ def run_safe_live_trading():
                     regime_adjusted_qty = max(1, int(risk_dollar / (estimated_premium * 100)))
                     
                     # Calculate max contracts under regime-adjusted limit
-                    # For options, use PREMIUM cost (not strike notional) - this is what you actually pay
                     regime_max_notional = risk_mgr.get_regime_max_notional(api, current_regime)
-                    premium_cost_per_contract = estimated_premium * 100  # Actual cost per contract
-                    regime_max_contracts = int(regime_max_notional / premium_cost_per_contract)
+                    regime_max_contracts = int(regime_max_notional / (strike * 100))
                     
                     if regime_max_contracts < 1:
-                        risk_mgr.log(f"REGIME MAX POSITION SIZE REACHED ({current_regime.upper()}): ${risk_mgr.get_current_exposure():,.0f} / ${regime_max_notional:,.0f} | Premium: ${estimated_premium:.2f} → NO NEW ENTRY", "WARNING")
+                        risk_mgr.log(f"REGIME MAX POSITION SIZE REACHED ({current_regime.upper()}): ${risk_mgr.get_current_exposure():,.0f} / ${regime_max_notional:,.0f} → NO NEW ENTRY", "WARNING")
                         time.sleep(30)
                         continue
                     
@@ -1598,7 +984,7 @@ def run_safe_live_trading():
                     qty = min(regime_adjusted_qty, regime_max_contracts)
                     
                     # Check order safety
-                    is_safe, reason = risk_mgr.check_order_safety(symbol, qty, strike, api, premium=estimated_premium)
+                    is_safe, reason = risk_mgr.check_order_safety(symbol, qty, strike, api)
                     if not is_safe:
                         risk_mgr.log(f"Order blocked: {reason}", "WARNING")
                         time.sleep(30)
@@ -1613,8 +999,8 @@ def run_safe_live_trading():
                             time_in_force='day'
                         )
                         notional = qty * strike * 100
-                        # Get actual fill price if available
-                        entry_premium = float(order.filled_avg_price) if hasattr(order, 'filled_avg_price') and order.filled_avg_price else estimated_premium
+                        # Estimate entry premium (will be updated with real value)
+                        entry_premium = estimate_premium(current_price, strike, 'put')
                         # Get current VIX and regime for this entry
                         entry_vix = risk_mgr.get_current_vix()
                         entry_regime = risk_mgr.get_vol_regime(entry_vix)
@@ -1634,8 +1020,6 @@ def run_safe_live_trading():
                             'tp1_done': False,
                             'tp2_done': False,
                             'tp3_done': False,
-                            'tp4_done': False,
-                            'tp5_done': False,
                             'vol_regime': entry_regime,  # Store regime at entry
                             'entry_vix': entry_vix
                         }
@@ -1643,24 +1027,6 @@ def run_safe_live_trading():
                         current_exposure = risk_mgr.get_current_exposure()
                         max_notional = risk_mgr.get_current_max_notional(api)
                         risk_mgr.log(f"✓ EXECUTED: BUY {qty}x {symbol} (PUT) @ ${strike:.2f} | {current_regime.upper()} REGIME | Risk: {regime_risk:.0%} | Max Size: {regime_params['max_pct']:.0%} | Notional: ${notional:,.0f} | Exposure: ${current_exposure:,.0f}/{regime_max_notional:,.0f}", "TRADE")
-                        
-                        # Log trade to database
-                        if trade_db:
-                            capital_before = risk_mgr.get_equity(api)
-                            trade_db.log_trade(
-                                symbol=symbol,
-                                action='BUY',
-                                qty=qty,
-                                price=strike,
-                                strike=strike,
-                                option_type='put',
-                                entry_premium=entry_premium,
-                                capital_before=capital_before,
-                                capital_after=capital_before,  # Will update on exit
-                                reason='ENTRY',
-                                regime=current_regime,
-                                vix=entry_vix
-                            )
                     except Exception as e:
                         risk_mgr.log(f"✗ Order failed: {e}", "ERROR")
                 
@@ -1668,7 +1034,7 @@ def run_safe_live_trading():
                     # Get actual positions from Alpaca
                     try:
                         alpaca_positions = api.list_positions()
-                        alpaca_option_positions = {pos.symbol: pos for pos in alpaca_positions if pos.asset_class in ['option', 'us_option'] or ('C' in pos.symbol[-9:] or 'P' in pos.symbol[-9:])}
+                        alpaca_option_positions = {pos.symbol: pos for pos in alpaca_positions if pos.asset_class == 'option'}
                     except Exception as e:
                         risk_mgr.log(f"Error fetching positions for trim/exit: {e}", "ERROR")
                         alpaca_option_positions = {}
@@ -1678,41 +1044,6 @@ def run_safe_live_trading():
                             if action == 5:  # Full exit
                                 api.close_position(sym)
                                 risk_mgr.log(f"✓ SAFE EXIT: Closed all {sym}", "TRADE")
-                                
-                                # Log trade to database
-                                if trade_db and sym in risk_mgr.open_positions:
-                                    pos_data = risk_mgr.open_positions[sym]
-                                    try:
-                                        alpaca_pos = alpaca_option_positions.get(sym)
-                                        if alpaca_pos:
-                                            current_premium = abs(float(alpaca_pos.market_value) / (float(alpaca_pos.qty) * 100)) if float(alpaca_pos.qty) > 0 else pos_data['entry_premium']
-                                        else:
-                                            current_premium = pos_data['entry_premium']
-                                        
-                                        qty = int(float(alpaca_pos.qty)) if alpaca_pos else pos_data.get('qty_remaining', pos_data.get('contracts', 0))
-                                        pnl_pct = (current_premium - pos_data['entry_premium']) / pos_data['entry_premium']
-                                        pnl_dollar = (current_premium - pos_data['entry_premium']) * qty * 100
-                                        capital_before = risk_mgr.get_equity(api)
-                                        
-                                        trade_db.log_trade(
-                                            symbol=sym,
-                                            action='SELL',
-                                            qty=qty,
-                                            price=current_premium,
-                                            strike=pos_data['strike'],
-                                            option_type=pos_data['type'],
-                                            entry_premium=pos_data['entry_premium'],
-                                            exit_premium=current_premium,
-                                            pnl=pnl_dollar,
-                                            pnl_pct=pnl_pct,
-                                            capital_before=capital_before,
-                                            capital_after=capital_before + pnl_dollar,
-                                            reason='RL_EXIT',
-                                            regime=pos_data.get('vol_regime', 'normal_vol'),
-                                            vix=pos_data.get('entry_vix', risk_mgr.get_current_vix())
-                                        )
-                                    except Exception as e:
-                                        risk_mgr.log(f"Error logging RL exit for {sym}: {e}", "WARNING")
                             else:
                                 # Get actual quantity from Alpaca
                                 if sym in alpaca_option_positions:
@@ -1730,41 +1061,6 @@ def run_safe_live_trading():
                                     time_in_force='day'
                                 )
                                 risk_mgr.log(f"✓ TRIMMED: {qty}x {sym}", "TRADE")
-                                
-                                # Log trade to database
-                                if trade_db and sym in risk_mgr.open_positions:
-                                    pos_data = risk_mgr.open_positions[sym]
-                                    try:
-                                        alpaca_pos = alpaca_option_positions.get(sym)
-                                        if alpaca_pos:
-                                            current_premium = abs(float(alpaca_pos.market_value) / (float(alpaca_pos.qty) * 100)) if float(alpaca_pos.qty) > 0 else pos_data['entry_premium']
-                                        else:
-                                            current_premium = pos_data['entry_premium']
-                                        
-                                        pnl_pct = (current_premium - pos_data['entry_premium']) / pos_data['entry_premium']
-                                        pnl_dollar = (current_premium - pos_data['entry_premium']) * qty * 100
-                                        capital_before = risk_mgr.get_equity(api)
-                                        reason = 'TRIM_50' if action == 3 else 'TRIM_70'
-                                        
-                                        trade_db.log_trade(
-                                            symbol=sym,
-                                            action='SELL',
-                                            qty=qty,
-                                            price=current_premium,
-                                            strike=pos_data['strike'],
-                                            option_type=pos_data['type'],
-                                            entry_premium=pos_data['entry_premium'],
-                                            exit_premium=current_premium,
-                                            pnl=pnl_dollar,
-                                            pnl_pct=pnl_pct,
-                                            capital_before=capital_before,
-                                            capital_after=capital_before + pnl_dollar,
-                                            reason=reason,
-                                            regime=pos_data.get('vol_regime', 'normal_vol'),
-                                            vix=pos_data.get('entry_vix', risk_mgr.get_current_vix())
-                                        )
-                                    except Exception as e:
-                                        risk_mgr.log(f"Error logging trim for {sym}: {e}", "WARNING")
                                 
                                 # Update tracked quantity
                                 if sym in risk_mgr.open_positions:
@@ -1831,32 +1127,11 @@ if __name__ == "__main__":
     if args.live:
         BASE_URL = LIVE_URL
         USE_PAPER = False
-        
-        # Check if paper keys are being used
-        if API_KEY.startswith('PK') or 'paper' in str(API_KEY).lower():
-            print("=" * 70)
-            print("❌ ERROR: Cannot use paper trading keys with LIVE mode!")
-            print("=" * 70)
-            print(f"Detected API Key: {API_KEY[:15]}...")
-            print("Paper keys (starting with 'PK') only work with paper trading.")
-            print("")
-            print("Options:")
-            print("  1. Use PAPER trading (recommended for testing):")
-            print("     → Remove --live flag: python3 mike_agent_live_safe.py")
-            print("")
-            print("  2. Get LIVE trading keys:")
-            print("     → Go to: https://app.alpaca.markets/dashboard/overview")
-            print("     → Navigate to API Keys section")
-            print("     → Generate LIVE API keys (different from paper keys)")
-            print("     → Update config.py with LIVE keys")
-            print("     → Then run: python3 mike_agent_live_safe.py --live")
-            print("=" * 70)
-            sys.exit(1)
-        
         print("⚠️  WARNING: LIVE TRADING MODE - Real money will be used!")
-        print("🚀 Starting in 5 seconds... (Press Ctrl+C to cancel)")
-        time.sleep(5)
-        print("✅ Proceeding with LIVE TRADING")
+        response = input("Type 'YES' to continue: ")
+        if response != 'YES':
+            print("Cancelled")
+            sys.exit(0)
     
     run_safe_live_trading()
 
