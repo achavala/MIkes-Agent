@@ -23,11 +23,23 @@ os.environ['OMP_NUM_THREADS'] = '1'
 try:
     from mike_agent_live_safe import (
         VOL_REGIMES, FIXED_STOP_LOSS, MAX_CONCURRENT, TRADING_SYMBOLS,
-        estimate_premium, find_atm_strike, get_option_symbol, prepare_observation,
+        estimate_premium, find_atm_strike, prepare_observation,
         get_iv_adjusted_risk
     )
+    # Import get_option_symbol separately to wrap it
+    from mike_agent_live_safe import get_option_symbol as _get_option_symbol_base
     from stable_baselines3 import PPO
     RL_AVAILABLE = True
+    
+    # Wrap get_option_symbol to accept expiry_date parameter
+    def get_option_symbol(underlying, strike, option_type, expiry_date=None):
+        if expiry_date is None:
+            return _get_option_symbol_base(underlying, strike, option_type)
+        # For backtest, use the expiry_date provided
+        date_str = expiry_date.strftime('%y%m%d') if hasattr(expiry_date, 'strftime') else datetime.now().strftime('%y%m%d')
+        strike_str = f"{int(strike * 1000):08d}"
+        type_str = 'C' if option_type == 'call' else 'P'
+        return f"{underlying}{date_str}{type_str}{strike_str}"
 except ImportError as e:
     print(f"Warning: Could not import agent components: {e}")
     print("Using simplified backtest mode...")
@@ -59,8 +71,13 @@ except ImportError as e:
     def find_atm_strike(price):
         return round(price)
     
-    def get_option_symbol(underlying, strike, option_type):
-        expiry = datetime.now().strftime("%y%m%d")
+    def get_option_symbol(underlying, strike, option_type, expiry_date=None):
+        if expiry_date is None:
+            expiry_date = datetime.now()
+        if hasattr(expiry_date, 'strftime'):
+            expiry = expiry_date.strftime("%y%m%d")
+        else:
+            expiry = datetime.now().strftime("%y%m%d")
         direction = "C" if option_type == 'call' else "P"
         return f"{underlying}{expiry}{direction}{int(strike*1000):08d}"
     
@@ -501,11 +518,11 @@ class BacktestEngine:
         # Adjust LOOKBACK based on data frequency
         # For daily data, we need fewer bars for lookback
         if interval == '1d':
-            min_lookback = 5  # 5 days minimum
+            min_lookback = 20  # 20 days for RL model (needs enough history)
         else:
             min_lookback = 20  # 20 bars for intraday
         
-        start_idx = max(min_lookback, 20)  # Ensure we have enough data
+        start_idx = min_lookback  # Start after LOOKBACK period
         
         for idx in range(start_idx, len(hist)):  # Start after LOOKBACK period
             current_bar = hist.iloc[idx]
@@ -534,11 +551,19 @@ class BacktestEngine:
             for sym in list(self.positions.keys()):
                 self.check_stop_losses_and_tps(hist, idx, sym)
             
-            # Market hours check (9:30 AM - 4:00 PM EST, before 2:30 PM for new entries)
-            hour = current_time.hour if hasattr(current_time, 'hour') else current_time.hour
-            minute = current_time.minute if hasattr(current_time, 'minute') else 0
-            
-            can_trade = (9 <= hour < 16) and not (hour == 14 and minute >= 30)
+            # Market hours check
+            # For daily data, assume market is open (we're simulating daily bars)
+            # For intraday data, check actual hours
+            if interval == '1d':
+                # Daily data - assume market is open (we're backtesting daily bars)
+                can_trade = True
+                # For daily data, simulate entry at market open (9:30 AM)
+                # No need to check 2:30 PM limit for daily bars
+            else:
+                # Intraday data - check actual market hours
+                hour = current_time.hour if hasattr(current_time, 'hour') else 9
+                minute = current_time.minute if hasattr(current_time, 'minute') else 30
+                can_trade = (9 <= hour < 16) and not (hour == 14 and minute >= 30)
             
             # New entry logic
             if can_trade and len(self.positions) < MAX_CONCURRENT:
@@ -546,14 +571,23 @@ class BacktestEngine:
                 current_regime = get_regime(current_vix)
                 self.regime_stats[current_regime]['days'] += 1
                 
-                # Get RL action
-                action = self.get_rl_action(hist.iloc[:idx+1])
+                # Get RL action - need at least LOOKBACK bars
+                if idx >= 20:  # Ensure we have enough data for RL model
+                    action = self.get_rl_action(hist.iloc[:idx+1])
+                else:
+                    action = 0  # HOLD if not enough data
+                
+                # Debug: Log actions occasionally
+                if idx % 10 == 0 and action != 0:
+                    print(f"  [{current_date}] Action: {action} | VIX: {current_vix:.1f} | Regime: {current_regime} | Positions: {len(self.positions)}")
                 
                 if action in [1, 2]:  # BUY CALL or BUY PUT
                     current_price = current_bar['Close']
                     strike = find_atm_strike(current_price)
                     option_type = 'call' if action == 1 else 'put'
-                    option_symbol = get_option_symbol(symbol, strike, option_type)
+                    # Use current date for option expiry (0DTE - same day expiry)
+                    expiry_date = current_time if hasattr(current_time, 'date') else datetime.combine(current_date, datetime.min.time())
+                    option_symbol = get_option_symbol(symbol, strike, option_type, expiry_date)
                     
                     # Skip if already have position in this symbol
                     if any(s.startswith(symbol) for s in self.positions.keys()):
@@ -574,7 +608,7 @@ class BacktestEngine:
                     if qty >= 1:
                         if self.enter_position(option_symbol, current_price, strike, option_type, 
                                              qty, current_regime, current_time):
-                            pass  # Position entered
+                            print(f"  ✓ ENTERED: {qty}x {option_symbol} ({option_type.upper()}) @ ${strike:.2f} | Regime: {current_regime} | Capital: ${self.capital:,.2f}")
             
             # Update equity curve
             # Calculate current portfolio value
