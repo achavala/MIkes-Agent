@@ -5,9 +5,24 @@ import time
 import os
 import pandas as pd
 import alpaca_trade_api as tradeapi
-import config
 import yfinance as yf
 from datetime import timedelta
+
+# Configuration - use environment variables (Railway) or config.py (local)
+try:
+    import config
+    ALPACA_KEY = config.ALPACA_KEY
+    ALPACA_SECRET = config.ALPACA_SECRET
+    ALPACA_BASE_URL = config.ALPACA_BASE_URL
+    FORCE_CAPITAL = getattr(config, 'FORCE_CAPITAL', None)
+except ImportError:
+    # Use environment variables (for Railway deployment)
+    ALPACA_KEY = os.getenv('ALPACA_KEY', '')
+    ALPACA_SECRET = os.getenv('ALPACA_SECRET', '')
+    ALPACA_BASE_URL = os.getenv('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets')
+    FORCE_CAPITAL = os.getenv('FORCE_CAPITAL', None)
+    if FORCE_CAPITAL:
+        FORCE_CAPITAL = float(FORCE_CAPITAL)
 
 # PWA Configuration
 st.set_page_config(
@@ -174,9 +189,9 @@ def get_portfolio_bar_data():
     """Get portfolio value, P&L, and today's trade stats"""
     try:
         api = tradeapi.REST(
-            config.ALPACA_KEY,
-            config.ALPACA_SECRET,
-            config.ALPACA_BASE_URL,
+            ALPACA_KEY,
+            ALPACA_SECRET,
+            ALPACA_BASE_URL,
             api_version='v2'
         )
         account = api.get_account()
@@ -187,7 +202,7 @@ def get_portfolio_bar_data():
             last_equity = float(account.last_equity)
         else:
             try:
-                last_equity = config.FORCE_CAPITAL if hasattr(config, 'FORCE_CAPITAL') else portfolio_value
+                last_equity = FORCE_CAPITAL if FORCE_CAPITAL else portfolio_value
             except:
                 last_equity = portfolio_value
         
@@ -347,9 +362,9 @@ def get_alpaca_positions():
     """Fetch current positions from Alpaca API"""
     try:
         api = tradeapi.REST(
-            config.ALPACA_KEY,
-            config.ALPACA_SECRET,
-            config.ALPACA_BASE_URL,
+            ALPACA_KEY,
+            ALPACA_SECRET,
+            ALPACA_BASE_URL,
             api_version='v2'
         )
         
@@ -454,9 +469,9 @@ def get_trading_history_alpaca_style():
     try:
         # Fetch orders directly from Alpaca for accurate fill prices
         api = tradeapi.REST(
-            config.ALPACA_KEY,
-            config.ALPACA_SECRET,
-            config.ALPACA_BASE_URL,
+            ALPACA_KEY,
+            ALPACA_SECRET,
+            ALPACA_BASE_URL,
             api_version='v2'
         )
         
