@@ -9,7 +9,70 @@ import config
 import yfinance as yf
 from datetime import timedelta
 
-st.set_page_config(page_title="Mike Agent v3", layout="wide")
+# PWA Configuration
+st.set_page_config(
+    page_title="Mike Agent v3",
+    page_icon="📈",
+    layout="wide",
+    initial_sidebar_state="collapsed"  # Better for mobile
+)
+
+# Add PWA meta tags and manifest
+st.markdown("""
+<link rel="manifest" href="/static/manifest.json">
+<meta name="theme-color" content="#00ff88">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Mike Agent">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+""", unsafe_allow_html=True)
+
+# Mobile-responsive CSS
+st.markdown("""
+<style>
+    /* Mobile optimizations */
+    @media (max-width: 768px) {
+        .main .block-container {
+            padding: 1rem;
+        }
+        h1 {
+            font-size: 1.5rem !important;
+        }
+        h2 {
+            font-size: 1.2rem !important;
+        }
+        /* Make tables scrollable on mobile */
+        .dataframe {
+            font-size: 0.8rem;
+        }
+        /* Better button sizes for touch */
+        .stButton > button {
+            width: 100%;
+            min-height: 44px; /* iOS touch target size */
+        }
+    }
+    
+    /* Hide Streamlit branding on mobile */
+    @media (max-width: 768px) {
+        #MainMenu {visibility: hidden;}
+        footer {visibility: hidden;}
+        header {visibility: hidden;}
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# Register service worker for PWA
+st.markdown("""
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/static/service-worker.js')
+      .then((reg) => console.log('Service Worker registered'))
+      .catch((err) => console.log('Service Worker registration failed'));
+  });
+}
+</script>
+""", unsafe_allow_html=True)
 
 # === LEFT SIDEBAR — CONFIGURATION ===
 with st.sidebar:
