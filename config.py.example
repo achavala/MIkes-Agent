@@ -1,0 +1,56 @@
+"""
+Configuration file for Mike Agent
+Copy this file to config.py and add your Alpaca API keys
+"""
+import os
+
+# Alpaca API Configuration
+ALPACA_KEY = os.getenv('ALPACA_KEY', 'YOUR_PAPER_KEY_HERE')
+ALPACA_SECRET = os.getenv('ALPACA_SECRET', 'YOUR_PAPER_SECRET_HERE')
+ALPACA_BASE_URL = 'https://paper-api.alpaca.markets'  # Paper trading URL
+
+# Trading Mode
+MODE = os.getenv('MODE', 'paper')  # 'paper' or 'live'
+
+# Trading Symbols
+SYMBOLS = ['SPY', 'QQQ']
+
+# Capital & Risk
+START_CAPITAL = 1000.0
+RISK_PCT = 0.07  # 7% risk per trade
+
+# Volatility Filters
+VIX_THRESHOLD = 18  # High vol threshold for puts
+IV_THRESHOLD = 20  # For 0DTE premiums
+
+# Black-Scholes Parameters
+T = 1/365  # 0DTE approximation (~1 day)
+R = 0.04  # Risk-free rate
+DEFAULT_SIGMA = 0.20  # Default IV if VIX unavailable
+
+# Strategy Parameters
+GAP_THRESHOLD = 0.005  # 0.5% gap threshold
+PT_PCT = 0.015  # 1.5% profit target
+SL_PCT = 0.20  # 20% stop loss
+AVG_DOWN_MIN = -0.30  # -30% for avg-down
+AVG_DOWN_MAX = -0.10  # -10% for avg-down
+TRIM_30_PCT = 0.50  # Trim 50% at +30%
+TRIM_60_PCT = 0.70  # Trim 70% at +60%
+
+# Position Sizing
+INITIAL_SIZE_PCT = 0.5  # Light start (50% of calculated size)
+LOTTO_THRESHOLD = 0.10  # Options < $0.10 are "lottos"
+
+# Data Sources
+HISTORICAL_DATA_CSV = 'historical_data.csv'
+USE_YAHOO_FINANCE = True  # Use Yahoo Finance if CSV not available
+
+# Backtesting
+MONTE_CARLO_SIMULATIONS = 100  # For Monte Carlo backtesting
+BACKTEST_START_DATE = '2025-11-03'
+BACKTEST_END_DATE = '2025-12-01'
+
+# Logging
+LOG_LEVEL = 'INFO'
+LOG_FILE = 'mike_agent.log'
+

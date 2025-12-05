@@ -1,0 +1,81 @@
+================================================================================
+MIKE AGENT v3 - BACKTEST ENVIRONMENT READY
+================================================================================
+
+✅ ENVIRONMENT STATUS: READY
+
+All required packages are installed:
+  ✓ pandas
+  ✓ yfinance  
+  ✓ numpy
+  ✓ scipy
+  ✓ stable_baselines3
+  ✓ mike_agent_live_safe.py
+  ✓ mike_rl_agent.zip (RL model available)
+
+================================================================================
+AVAILABLE DATA RANGES
+================================================================================
+
+SPY:  1993-01-29 to 2025-12-04 (8,270 trading days)
+VIX:  1990-01-02 to 2025-12-04 (9,049 trading days)
+QQQ:  1999-03-10 to 2025-12-04 (6,728 trading days)
+
+================================================================================
+QUICK START COMMANDS
+================================================================================
+
+1. Quick Test (Last 3 Days):
+   python3 backtest_mike_agent_v3.py --start 2024-12-02 --end 2024-12-04 --interval 15m
+
+2. Last 30 Days:
+   python3 backtest_mike_agent_v3.py --start 2024-11-01 --end 2024-12-04
+
+3. Last 90 Days:
+   python3 backtest_mike_agent_v3.py --start 2024-09-01 --end 2024-12-04
+
+4. Last 1 Year:
+   python3 backtest_mike_agent_v3.py --start 2024-01-01 --end 2024-12-31 --interval 1d
+
+5. Export Results:
+   python3 backtest_mike_agent_v3.py --start 2024-11-01 --end 2024-12-04 --export results.csv
+
+================================================================================
+WHAT'S INCLUDED
+================================================================================
+
+✓ Full agent logic from mike_agent_live_safe.py
+✓ RL model predictions (if model available)
+✓ 5-tier take-profit system (TP1-TP5)
+✓ Fixed -15% stop-loss
+✓ Trailing stop after TP4
+✓ Volatility regime engine (4 regimes)
+✓ All 13 risk safeguards
+✓ Realistic option pricing (Black-Scholes)
+✓ Transaction fees and slippage
+✓ Market hours enforcement
+
+================================================================================
+FILES CREATED
+================================================================================
+
+1. backtest_mike_agent_v3.py  - Main backtest script
+2. BACKTEST_GUIDE.md          - Complete usage guide
+3. BACKTEST_SUMMARY.txt       - This summary
+
+================================================================================
+NEXT STEPS
+================================================================================
+
+1. Run a quick test:
+   python3 backtest_mike_agent_v3.py --start 2024-12-02 --end 2024-12-04 --interval 15m
+
+2. Review results and adjust parameters if needed
+
+3. Run longer backtests for comprehensive analysis
+
+4. Export equity curves for further analysis
+
+================================================================================
+For detailed instructions, see: BACKTEST_GUIDE.md
+================================================================================

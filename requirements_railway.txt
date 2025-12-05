@@ -1,0 +1,30 @@
+# Core dependencies for Railway deployment
+# Optimized for production (removed dev tools)
+
+# Web Framework
+streamlit==1.51.0
+
+# Trading API
+alpaca-trade-api==0.48
+
+# Machine Learning
+stable-baselines3[extra]==2.7.0
+gymnasium==1.2.2
+torch==2.9.1
+
+# Data & Analysis
+yfinance==0.2.66
+pandas==2.3.3
+numpy==2.3.5
+scipy==1.16.3
+scikit-learn==1.5.1
+
+# Utilities
+python-dateutil==2.9.0.post0
+pytz==2025.2
+requests==2.32.5
+
+# Optional (for advanced features)
+# tensorflow==2.20.0  # Uncomment if using LSTM features
+# plotly==5.24.1  # Already included with streamlit
+
