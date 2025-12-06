@@ -34,6 +34,8 @@ trade_history.csv
 # Databases
 *.db
 community_platform.db
+trades_database.db
+test_trades_database.db
 
 # Node modules and incomplete projects
 node_modules/
