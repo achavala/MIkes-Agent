@@ -4,8 +4,9 @@ live_config.py
 paper_config.py
 .env
 
-# Models
+# Models (but track training checkpoints)
 *.zip
+!models/*.zip
 mike_rl_model.zip
 mike_rl_agent.zip
 
@@ -17,9 +18,11 @@ __pycache__/
 # OS
 .DS_Store
 
-# Logs
+# Logs (but track training logs for progress monitoring)
 logs/
 *.log
+!training*.log
+!training_*.log
 mike.log
 mike_error.log
 streamlit.log
@@ -30,6 +33,10 @@ mike_agent_trades.csv
 mike_agent_trades_*.csv
 test_trade.csv
 trade_history.csv
+
+# Training data files (too large for GitHub)
+data/historical/enriched/*.pkl
+*.pkl
 
 # Databases
 *.db
