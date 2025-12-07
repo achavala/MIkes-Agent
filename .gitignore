@@ -38,6 +38,11 @@ trade_history.csv
 data/historical/enriched/*.pkl
 *.pkl
 
+# Training packages (backup files)
+mike-agent-training-package_*.tar.gz
+*.tar.gz
+!requirements.txt
+
 # Databases
 *.db
 community_platform.db
