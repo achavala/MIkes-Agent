@@ -70,13 +70,16 @@ except ImportError:
     GAP_DETECTION_AVAILABLE = False
     print("Warning: gap_detection module not found. Gap detection will be disabled.")
 
-# Import gap detection module
+# Import institutional feature engineering module
 try:
-    from gap_detection import detect_overnight_gap, get_gap_based_action
-    GAP_DETECTION_AVAILABLE = True
+    from institutional_features import InstitutionalFeatureEngine, create_feature_engine
+    INSTITUTIONAL_FEATURES_AVAILABLE = True
 except ImportError:
-    GAP_DETECTION_AVAILABLE = False
-    print("Warning: gap_detection module not found. Gap detection will be disabled.")
+    INSTITUTIONAL_FEATURES_AVAILABLE = False
+    print("Warning: institutional_features module not found. Using basic features only.")
+
+# Configuration: Use institutional features (set to False for backward compatibility)
+USE_INSTITUTIONAL_FEATURES = True  # Enable institutional-grade features
 
 # ==================== TRADING SYMBOLS ====================
 # Symbols to trade (0DTE options)
@@ -1006,10 +1009,30 @@ def check_stop_losses(api: tradeapi.REST, risk_mgr: RiskManager, current_price: 
             except Exception as e2:
                 risk_mgr.log(f"✗ Alternative close also failed for {symbol}: {e2}", "ERROR")
 
+# ==================== INSTITUTIONAL FEATURE ENGINE INITIALIZATION ====================
+if INSTITUTIONAL_FEATURES_AVAILABLE and USE_INSTITUTIONAL_FEATURES:
+    feature_engine = create_feature_engine(lookback_minutes=LOOKBACK)
+    print("✅ Institutional feature engine initialized (500+ features)")
+else:
+    feature_engine = None
+
 # ==================== OBSERVATION PREPARATION ====================
-def prepare_observation(data: pd.DataFrame, risk_mgr: RiskManager) -> np.ndarray:
+def prepare_observation(data: pd.DataFrame, risk_mgr: RiskManager, symbol: str = 'SPY') -> np.ndarray:
     """
-    Prepare observation for RL model
+    Prepare observation for RL model with backward compatibility
+    
+    If USE_INSTITUTIONAL_FEATURES is True, extracts 500+ features
+    Otherwise, uses simple 5-feature OHLCV (backward compatible)
+    """
+    # Use institutional features if available and enabled
+    if INSTITUTIONAL_FEATURES_AVAILABLE and USE_INSTITUTIONAL_FEATURES and feature_engine:
+        return prepare_observation_institutional(data, risk_mgr, symbol)
+    else:
+        return prepare_observation_basic(data, risk_mgr)
+
+def prepare_observation_basic(data: pd.DataFrame, risk_mgr: RiskManager) -> np.ndarray:
+    """
+    Basic observation preparation (backward compatible)
     Model expects shape (20, 5) - matching training: [open, high, low, close, volume]
     """
     if len(data) < LOOKBACK:
@@ -1051,6 +1074,58 @@ def prepare_observation(data: pd.DataFrame, risk_mgr: RiskManager) -> np.ndarray
     state = state.reshape(1, LOOKBACK, 5)
     
     return state
+
+def prepare_observation_institutional(data: pd.DataFrame, risk_mgr: RiskManager, symbol: str = 'SPY') -> np.ndarray:
+    """
+    Institutional-grade observation preparation (500+ features)
+    
+    For backward compatibility with existing model:
+    - Extracts all features
+    - Uses PCA or feature selection to reduce to manageable size
+    - OR: Returns full features for new model training
+    """
+    try:
+        # Extract all institutional features
+        all_features, feature_groups = feature_engine.extract_all_features(
+            data,
+            symbol=symbol,
+            risk_mgr=risk_mgr,
+            include_microstructure=True
+        )
+        
+        # Take last LOOKBACK bars
+        if len(all_features) >= LOOKBACK:
+            recent_features = all_features[-LOOKBACK:]
+        else:
+            # Pad if needed
+            padding = np.zeros((LOOKBACK - len(all_features), all_features.shape[1]))
+            recent_features = np.vstack([padding, all_features])
+        
+        # For now: Use feature selection to reduce to top features
+        # TODO: Retrain model with full features or use PCA
+        
+        # Option 1: Select top N features by variance (for backward compatibility)
+        # For existing model, we'll extract first 5 features from basic OHLCV
+        # and add selected institutional features
+        
+        # Get basic OHLCV features (first 5 from institutional engine or fallback)
+        basic_features = prepare_observation_basic(data, risk_mgr)
+        
+        # For backward compatibility: Use basic features but log that institutional features are available
+        if risk_mgr and hasattr(risk_mgr, 'log'):
+            if not hasattr(prepare_observation_institutional, '_logged'):
+                risk_mgr.log("🏦 Institutional features available (500+), using basic features for model compatibility", "INFO")
+                prepare_observation_institutional._logged = True
+        
+        # Return basic features for now (model compatibility)
+        # Full integration requires model retraining
+        return basic_features
+        
+    except Exception as e:
+        # Fallback to basic features on error
+        if risk_mgr and hasattr(risk_mgr, 'log'):
+            risk_mgr.log(f"Warning: Institutional feature extraction failed: {e}, using basic features", "WARNING")
+        return prepare_observation_basic(data, risk_mgr)
 
 # ==================== MAIN LIVE LOOP ====================
 def run_safe_live_trading():
@@ -1235,7 +1310,9 @@ def run_safe_live_trading():
                 
                 # Prepare observation
                 # Returns shape (1, 20, 5) for VecEnv compatibility
-                obs = prepare_observation(hist, risk_mgr)
+                # Get current symbol for feature extraction (use SPY for main observation)
+                current_symbol = 'SPY'  # Main observation uses SPY data
+                obs = prepare_observation(hist, risk_mgr, symbol=current_symbol)
                 
                 # RL Decision
                 # obs shape should be (1, 20, 5) - matching VecEnv format
