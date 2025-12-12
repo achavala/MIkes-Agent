@@ -1,0 +1,40 @@
+Gym has been unmaintained since 2022 and does not support NumPy 2.0 amongst other critical functionality.
+Please upgrade to Gymnasium, the maintained drop-in replacement of Gym, or contact the authors of your software and request that they upgrade.
+Users of this version of Gym should be able to simply replace 'import gym' with 'import gymnasium as gym' in the vast majority of cases.
+See the migration guide at https://gymnasium.farama.org/introduction/migration_guide/ for additional information.
+⚠️ 'ta' library not available. Install with: pip install ta
+⚠️ 'talib' library not available. Install with: pip install ta-lib
+======================================================================
+🚀 HISTORICAL MODEL TRAINING
+======================================================================
+Symbols: ['SPY', 'QQQ', 'SPX']
+Date Range: 2002-01-01 to today
+Total Timesteps: 5,000,000
+Use Greeks: True
+Use Features: False
+Regime Balanced: True
+======================================================================
+
+📥 LOADING ENRICHED HISTORICAL DATA...
+   Using pre-collected enriched data files (works offline)
+
+
+📊 Loading SPY enriched data...
+   📂 Loading from: SPY_enriched_2002-01-01_latest.pkl
+   ✅ SPY: 0 bars loaded
+      Date range: NaT to NaT
+
+📊 Loading QQQ enriched data...
+   📂 Loading from: QQQ_enriched_2002-01-01_latest.pkl
+   ✅ QQQ: 0 bars loaded
+      Date range: NaT to NaT
+
+📊 Loading SPX enriched data...
+   📂 Loading from: SPX_enriched_2002-01-01_latest.pkl
+   ✅ SPX: 0 bars loaded
+      Date range: NaT to NaT
+
+======================================================================
+📚 PREPARING TRAINING ENVIRONMENTS...
+======================================================================
+❌ No environments created! Exiting.

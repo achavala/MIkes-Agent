@@ -1,0 +1,197 @@
+====================================================================================================
+🔍 COMPREHENSIVE TRADE ANALYSIS
+====================================================================================================
+
+✅ Connected to Alpaca API
+📥 Fetching all trades...
+   Found 52 filled orders
+🔄 Matching buy/sell pairs...
+   Matched 6 trades
+📋 Parsing log files...
+   Found 4 log files
+   Found 0 entries, 0 TPs, 0 SLs
+📊 Generating comprehensive analysis...
+
+====================================================================================================
+✅ ANALYSIS COMPLETE
+====================================================================================================
+Report saved to: comprehensive_trade_analysis_20251208_175143.txt
+
+====================================================================================================
+📊 COMPREHENSIVE TRADE ANALYSIS REPORT
+====================================================================================================
+Generated: 2025-12-08 17:51:43
+Total Trades Analyzed: 6
+
+====================================================================================================
+📈 SUMMARY STATISTICS
+====================================================================================================
+Completed Trades: 6
+Open Trades: 0
+Total Realized P&L: $-124.00
+Average P&L per Trade: $-20.67
+Win Rate: 33.3%
+Winning Trades: 2
+Losing Trades: 4
+Average Win: +7.13%
+Average Loss: -3.90%
+
+====================================================================================================
+🎯 ENTRY DECISION ANALYSIS
+====================================================================================================
+UNKNOWN: 6 trades (100.0%)
+
+====================================================================================================
+🚪 EXIT DECISION ANALYSIS
+====================================================================================================
+UNKNOWN: 6 trades (100.0%)
+
+====================================================================================================
+📋 DETAILED TRADE-BY-TRADE ANALYSIS
+====================================================================================================
+
+Trade #1: SPY251208C00686000
+----------------------------------------------------------------------------------------------------
+Entry Time: 2025-12-08 09:30:55 EST
+Entry Price: $1.4900
+Quantity: 33.0 contracts
+Entry Cost: $4,917.00
+
+Exit Time: 2025-12-08 09:31:52 EST
+Exit Price: $1.3900
+Duration: 0.9 minutes
+P&L: $-330.00 (-6.71%)
+
+ENTRY DECISION:
+  Source: UNKNOWN
+  Trigger: UNKNOWN
+
+EXIT DECISION:
+  Trigger: UNKNOWN
+  Reason: Early exit at -6.7% after 1 min
+  ⚠️  EARLY EXIT (before 60 min)
+
+
+Trade #2: SPY251208C00686000
+----------------------------------------------------------------------------------------------------
+Entry Time: 2025-12-08 09:44:05 EST
+Entry Price: $1.1700
+Quantity: 36.0 contracts
+Entry Cost: $4,212.00
+
+Exit Time: 2025-12-08 09:45:01 EST
+Exit Price: $1.1500
+Duration: 0.9 minutes
+P&L: $-72.00 (-1.71%)
+
+ENTRY DECISION:
+  Source: UNKNOWN
+  Trigger: UNKNOWN
+
+EXIT DECISION:
+  Trigger: UNKNOWN
+  Reason: Early exit at -1.7% after 1 min
+  ⚠️  EARLY EXIT (before 60 min)
+
+
+Trade #3: SPY251208C00685000
+----------------------------------------------------------------------------------------------------
+Entry Time: 2025-12-08 10:15:05 EST
+Entry Price: $1.0700
+Quantity: 36.0 contracts
+Entry Cost: $3,852.00
+
+Exit Time: 2025-12-08 10:16:01 EST
+Exit Price: $1.0600
+Duration: 0.9 minutes
+P&L: $-36.00 (-0.93%)
+
+ENTRY DECISION:
+  Source: UNKNOWN
+  Trigger: UNKNOWN
+
+EXIT DECISION:
+  Trigger: UNKNOWN
+  Reason: Early exit at -0.9% after 1 min
+  ⚠️  EARLY EXIT (before 60 min)
+
+
+Trade #4: SPY251208C00684000
+----------------------------------------------------------------------------------------------------
+Entry Time: 2025-12-08 10:56:40 EST
+Entry Price: $1.0100
+Quantity: 38.0 contracts
+Entry Cost: $3,838.00
+
+Exit Time: 2025-12-08 10:57:37 EST
+Exit Price: $1.1400
+Duration: 0.9 minutes
+P&L: $494.00 (+12.87%)
+
+ENTRY DECISION:
+  Source: UNKNOWN
+  Trigger: UNKNOWN
+
+EXIT DECISION:
+  Trigger: UNKNOWN
+  Reason: Early profit-taking at 12.9% after 1 min
+  ⚠️  EARLY EXIT (before 60 min)
+
+
+Trade #5: SPY251208C00683000
+----------------------------------------------------------------------------------------------------
+Entry Time: 2025-12-08 12:03:58 EST
+Entry Price: $0.9600
+Quantity: 36.0 contracts
+Entry Cost: $3,456.00
+
+Exit Time: 2025-12-08 12:04:55 EST
+Exit Price: $0.9000
+Duration: 0.9 minutes
+P&L: $-216.00 (-6.25%)
+
+ENTRY DECISION:
+  Source: UNKNOWN
+  Trigger: UNKNOWN
+
+EXIT DECISION:
+  Trigger: UNKNOWN
+  Reason: Early exit at -6.2% after 1 min
+  ⚠️  EARLY EXIT (before 60 min)
+
+
+Trade #6: SPY251208C00682000
+----------------------------------------------------------------------------------------------------
+Entry Time: 2025-12-08 13:59:26 EST
+Entry Price: $0.7200
+Quantity: 36.0 contracts
+Entry Cost: $2,592.00
+
+Exit Time: 2025-12-08 14:00:23 EST
+Exit Price: $0.7300
+Duration: 0.9 minutes
+P&L: $36.00 (+1.39%)
+
+ENTRY DECISION:
+  Source: UNKNOWN
+  Trigger: UNKNOWN
+
+EXIT DECISION:
+  Trigger: UNKNOWN
+  Reason: Early profit-taking at 1.4% after 1 min
+  ⚠️  EARLY EXIT (before 60 min)
+
+
+====================================================================================================
+🔴 LOSS ANALYSIS - WHY TRADES LOST MONEY
+====================================================================================================
+Total Losing Trades: 4
+Total Loss: $-654.00
+Average Loss: $-163.50
+
+Loss Breakdown by Exit Trigger:
+  UNKNOWN: 4 trades | Total: $-654.00 | Avg: $-163.50
+
+Losing Trades Detailed:
+  • SPY251208C00686000: -6.71% | Early exit at -6.7% after 1 min | Duration: 0.9 min
+  • SPY251208C0068

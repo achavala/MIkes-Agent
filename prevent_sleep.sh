@@ -32,7 +32,8 @@ function start_prevent_sleep() {
     # -i: Prevent system from idle sleeping
     # -m: Prevent disk from idle sleeping
     # -s: Prevent system from sleeping (even on AC power)
-    caffeinate -d -i -m -s &
+    # -u: Prevent system from sleeping when lid is closed (CRITICAL for MacBook)
+    caffeinate -d -i -m -s -u &
     CAFFEINATE_PID=$!
     
     echo "$CAFFEINATE_PID" > "$PID_FILE"

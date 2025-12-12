@@ -50,6 +50,8 @@ class TradeDatabase:
                 reason TEXT,
                 order_id TEXT,
                 source TEXT DEFAULT 'alpaca',
+                submitted_at TEXT,
+                filled_at TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(timestamp, symbol, action, qty)
             )
@@ -161,16 +163,26 @@ class TradeDatabase:
             'vix': trade_data.get('vix', 0),
             'reason': trade_data.get('reason', trade_data.get('metadata', '')),
             'order_id': trade_data.get('order_id', trade_data.get('id', '')),
-            'source': trade_data.get('source', 'alpaca')
+            'source': trade_data.get('source', 'alpaca'),
+            'submitted_at': trade_data.get('submitted_at', ''),
+            'filled_at': trade_data.get('filled_at', '')
         }
         
         try:
+            # Check if submitted_at and filled_at columns exist, add if not
+            cursor.execute("PRAGMA table_info(trades)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if 'submitted_at' not in columns:
+                cursor.execute("ALTER TABLE trades ADD COLUMN submitted_at TEXT")
+            if 'filled_at' not in columns:
+                cursor.execute("ALTER TABLE trades ADD COLUMN filled_at TEXT")
+            
             cursor.execute("""
                 INSERT OR REPLACE INTO trades (
                     timestamp, symbol, underlying, expiration_date, strike_price, option_type,
                     is_0dte, action, qty, entry_premium, exit_premium, entry_price, exit_price,
-                    fill_price, pnl, pnl_pct, regime, vix, reason, order_id, source
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    fill_price, pnl, pnl_pct, regime, vix, reason, order_id, source, submitted_at, filled_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 trade_record['timestamp'],
                 trade_record['symbol'],
@@ -192,7 +204,9 @@ class TradeDatabase:
                 trade_record['vix'],
                 trade_record['reason'],
                 trade_record['order_id'],
-                trade_record['source']
+                trade_record['source'],
+                trade_record['submitted_at'],
+                trade_record['filled_at']
             ))
             
             trade_id = cursor.lastrowid

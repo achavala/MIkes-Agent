@@ -1,0 +1,426 @@
+====================================================================================================
+COMPLETE TRADE DETAILS - TRADE BY TRADE BREAKDOWN
+====================================================================================================
+
+✅ Connected to Alpaca API
+
+📅 Analysis Date: 2025-12-08 (06:50 PM EST)
+
+📊 Fetching all filled orders from Alpaca...
+✅ Found 52 filled orders today
+
+====================================================================================================
+TRADE-BY-TRADE BREAKDOWN
+====================================================================================================
+
+📈 Symbol: SPY251208C00682000
+----------------------------------------------------------------------------------------------------
+  Trade #1:
+    BUY:  5 contracts @ $0.7200  |  01:59:26 PM
+    SELL: 5 contracts @ $0.7300  |  02:00:23 PM
+    Entry Cost:    $360.00
+    Exit Proceeds: $365.00
+    P&L:           $5.00 (+1.39%)
+    Duration:      0 days 00:00:56.949349
+
+  Trade #2:
+    BUY:  5 contracts @ $0.7200  |  01:59:26 PM
+    SELL: 5 contracts @ $0.8400  |  02:01:20 PM
+    Entry Cost:    $360.00
+    Exit Proceeds: $420.00
+    P&L:           $60.00 (+16.67%)
+    Duration:      0 days 00:01:53.702150
+
+  Trade #3:
+    BUY:  5 contracts @ $0.7200  |  01:59:26 PM
+    SELL: 5 contracts @ $0.7200  |  02:02:17 PM
+    Entry Cost:    $360.00
+    Exit Proceeds: $360.00
+    P&L:           $0.00 (+0.00%)
+    Duration:      0 days 00:02:50.936364
+
+  Trade #4:
+    BUY:  5 contracts @ $0.7200  |  01:59:26 PM
+    SELL: 5 contracts @ $0.6400  |  02:03:14 PM
+    Entry Cost:    $360.00
+    Exit Proceeds: $320.00
+    P&L:           $-40.00 (-11.11%)
+    Duration:      0 days 00:03:47.716396
+
+  Trade #5:
+    BUY:  5 contracts @ $0.7200  |  01:59:26 PM
+    SELL: 5 contracts @ $0.6900  |  02:04:10 PM
+    Entry Cost:    $360.00
+    Exit Proceeds: $345.00
+    P&L:           $-15.00 (-4.17%)
+    Duration:      0 days 00:04:44.349933
+
+  Trade #6:
+    BUY:  5 contracts @ $0.7200  |  01:59:26 PM
+    SELL: 5 contracts @ $0.7000  |  02:05:07 PM
+    Entry Cost:    $360.00
+    Exit Proceeds: $350.00
+    P&L:           $-10.00 (-2.78%)
+    Duration:      0 days 00:05:41.014644
+
+  Trade #7:
+    BUY:  5 contracts @ $0.7200  |  01:59:26 PM
+    SELL: 5 contracts @ $0.7400  |  02:06:04 PM
+    Entry Cost:    $360.00
+    Exit Proceeds: $370.00
+    P&L:           $10.00 (+2.78%)
+    Duration:      0 days 00:06:37.639665514
+
+  ⚠️  Partial position still open:
+    BUY:  1 contracts @ $0.7200  |  01:59:26 PM
+    Status: OPEN POSITION
+
+📈 Symbol: SPY251208C00683000
+----------------------------------------------------------------------------------------------------
+  Trade #1:
+    BUY:  5 contracts @ $0.9600  |  12:03:58 PM
+    SELL: 5 contracts @ $0.9000  |  12:04:55 PM
+    Entry Cost:    $480.00
+    Exit Proceeds: $450.00
+    P&L:           $-30.00 (-6.25%)
+    Duration:      0 days 00:00:56.968546
+
+  Trade #2:
+    BUY:  5 contracts @ $0.9600  |  12:03:58 PM
+    SELL: 5 contracts @ $1.0100  |  12:05:52 PM
+    Entry Cost:    $480.00
+    Exit Proceeds: $505.00
+    P&L:           $25.00 (+5.21%)
+    Duration:      0 days 00:01:53.446732
+
+  Trade #3:
+    BUY:  5 contracts @ $0.9600  |  12:03:58 PM
+    SELL: 5 contracts @ $1.0100  |  12:06:49 PM
+    Entry Cost:    $480.00
+    Exit Proceeds: $505.00
+    P&L:           $25.00 (+5.21%)
+    Duration:      0 days 00:02:50.083982
+
+  Trade #4:
+    BUY:  5 contracts @ $0.9600  |  12:03:58 PM
+    SELL: 5 contracts @ $1.1000  |  12:07:45 PM
+    Entry Cost:    $480.00
+    Exit Proceeds: $550.00
+    P&L:           $70.00 (+14.58%)
+    Duration:      0 days 00:03:46.709476
+
+  Trade #5:
+    BUY:  5 contracts @ $0.9600  |  12:03:58 PM
+    SELL: 5 contracts @ $1.0700  |  12:08:42 PM
+    Entry Cost:    $480.00
+    Exit Proceeds: $535.00
+    P&L:           $55.00 (+11.46%)
+    Duration:      0 days 00:04:43.544357
+
+  Trade #6:
+    BUY:  5 contracts @ $0.9600  |  12:03:58 PM
+    SELL: 5 contracts @ $1.0500  |  12:09:38 PM
+    Entry Cost:    $480.00
+    Exit Proceeds: $525.00
+    P&L:           $45.00 (+9.38%)
+    Duration:      0 days 00:05:40.013258
+
+  Trade #7:
+    BUY:  5 contracts @ $0.9600  |  12:03:58 PM
+    SELL: 5 contracts @ $1.0300  |  12:10:35 PM
+    Entry Cost:    $480.00
+    Exit Proceeds: $515.00
+    P&L:           $35.00 (+7.29%)
+    Duration:      0 days 00:06:36.788304
+
+  Trade #8:
+    BUY:  1 contracts @ $0.9600  |  12:03:58 PM
+    SELL: 1 contracts @ $0.2800  |  01:58:29 PM
+    Entry Cost:    $96.00
+    Exit Proceeds: $28.00
+    P&L:           $-68.00 (-70.83%)
+    Duration:      0 days 01:54:30.660223
+
+📈 Symbol: SPY251208C00684000
+----------------------------------------------------------------------------------------------------
+  Trade #1:
+    BUY:  5 contracts @ $1.0100  |  10:56:40 AM
+    SELL: 5 contracts @ $1.1400  |  10:57:37 AM
+    Entry Cost:    $505.00
+    Exit Proceeds: $570.00
+    P&L:           $65.00 (+12.87%)
+    Duration:      0 days 00:00:56.711448
+
+  Trade #2:
+    BUY:  5 contracts @ $1.0100  |  10:56:40 AM
+    SELL: 5 contracts @ $1.1100  |  10:58:35 AM
+    Entry Cost:    $505.00
+    Exit Proceeds: $555.00
+    P&L:           $50.00 (+9.90%)
+    Duration:      0 days 00:01:54.110861
+
+  Trade #3:
+    BUY:  5 contracts @ $1.0100  |  10:56:40 AM
+    SELL: 5 contracts @ $1.0400  |  10:59:31 AM
+    Entry Cost:    $505.00
+    Exit Proceeds: $520.00
+    P&L:           $15.00 (+2.97%)
+    Duration:      0 days 00:02:50.698208
+
+  Trade #4:
+    BUY:  5 contracts @ $1.0100  |  10:56:40 AM
+    SELL: 5 contracts @ $0.9400  |  11:00:28 AM
+    Entry Cost:    $505.00
+    Exit Proceeds: $470.00
+    P&L:           $-35.00 (-6.93%)
+    Duration:      0 days 00:03:47.406798
+
+  Trade #5:
+    BUY:  5 contracts @ $1.0100  |  10:56:40 AM
+    SELL: 5 contracts @ $0.8600  |  11:01:24 AM
+    Entry Cost:    $505.00
+    Exit Proceeds: $430.00
+    P&L:           $-75.00 (-14.85%)
+    Duration:      0 days 00:04:44.033607
+
+  Trade #6:
+    BUY:  5 contracts @ $1.0100  |  10:56:40 AM
+    SELL: 5 contracts @ $0.8400  |  11:02:21 AM
+    Entry Cost:    $505.00
+    Exit Proceeds: $420.00
+    P&L:           $-85.00 (-16.83%)
+    Duration:      0 days 00:05:40.869644
+
+  Trade #7:
+    BUY:  5 contracts @ $1.0100  |  10:56:40 AM
+    SELL: 5 contracts @ $0.8200  |  11:03:18 AM
+    Entry Cost:    $505.00
+    Exit Proceeds: $410.00
+    P&L:           $-95.00 (-18.81%)
+    Duration:      0 days 00:06:37.928314
+
+  Trade #8:
+    BUY:  3 contracts @ $1.0100  |  10:56:40 AM
+    SELL: 3 contracts @ $0.4700  |  12:03:02 PM
+    Entry Cost:    $303.00
+    Exit Proceeds: $141.00
+    P&L:           $-162.00 (-53.47%)
+    Duration:      0 days 01:06:21.188623
+
+📈 Symbol: SPY251208C00685000
+----------------------------------------------------------------------------------------------------
+  Trade #1:
+    BUY:  5 contracts @ $1.0700  |  10:15:05 AM
+    SELL: 5 contracts @ $1.0600  |  10:16:01 AM
+    Entry Cost:    $535.00
+    Exit Proceeds: $530.00
+    P&L:           $-5.00 (-0.93%)
+    Duration:      0 days 00:00:56.601137
+
+  Trade #2:
+    BUY:  5 contracts @ $1.0700  |  10:15:05 AM
+    SELL: 5 contracts @ $1.1300  |  10:16:58 AM
+    Entry Cost:    $535.00
+    Exit Proceeds: $565.00
+    P&L:           $30.00 (+5.61%)
+    Duration:      0 days 00:01:53.356408
+
+  Trade #3:
+    BUY:  5 contracts @ $1.0700  |  10:15:05 AM
+    SELL: 5 contracts @ $1.2300  |  10:17:54 AM
+    Entry Cost:    $535.00
+    Exit Proceeds: $615.00
+    P&L:           $80.00 (+14.95%)
+    Duration:      0 days 00:02:49.620748
+
+  Trade #4:
+    BUY:  5 contracts @ $1.0700  |  10:15:05 AM
+    SELL: 5 contracts @ $1.1600  |  10:18:51 AM
+    Entry Cost:    $535.00
+    Exit Proceeds: $580.00
+    P&L:           $45.00 (+8.41%)
+    Duration:      0 days 00:03:45.988720
+
+  Trade #5:
+    BUY:  5 contracts @ $1.0700  |  10:15:05 AM
+    SELL: 5 contracts @ $1.1600  |  10:19:47 AM
+    Entry Cost:    $535.00
+    Exit Proceeds: $580.00
+    P&L:           $45.00 (+8.41%)
+    Duration:      0 days 00:04:42.699889
+
+  Trade #6:
+    BUY:  5 contracts @ $1.0700  |  10:15:05 AM
+    SELL: 5 contracts @ $1.1300  |  10:20:44 AM
+    Entry Cost:    $535.00
+    Exit Proceeds: $565.00
+    P&L:           $30.00 (+5.61%)
+    Duration:      0 days 00:05:39.670186
+
+  Trade #7:
+    BUY:  5 contracts @ $1.0700  |  10:15:05 AM
+    SELL: 5 contracts @ $1.1600  |  10:21:41 AM
+    Entry Cost:    $535.00
+    Exit Proceeds: $580.00
+    P&L:           $45.00 (+8.41%)
+    Duration:      0 days 00:06:36.261442
+
+  Trade #8:
+    BUY:  1 contracts @ $1.0700  |  10:15:05 AM
+    SELL: 1 contracts @ $0.6500  |  10:55:43 AM
+    Entry Cost:    $107.00
+    Exit Proceeds: $65.00
+    P&L:           $-42.00 (-39.25%)
+    Duration:      0 days 00:40:38.632107
+
+📈 Symbol: SPY251208C00686000
+----------------------------------------------------------------------------------------------------
+  Trade #1:
+    BUY:  5 contracts @ $1.4900  |  09:30:55 AM
+    SELL: 5 contracts @ $1.3900  |  09:31:52 AM
+    Entry Cost:    $745.00
+    Exit Proceeds: $695.00
+    P&L:           $-50.00 (-6.71%)
+    Duration:      0 days 00:00:56.364031
+
+  Trade #2:
+    BUY:  5 contracts @ $1.4900  |  09:30:55 AM
+    SELL: 5 contracts @ $1.4200  |  09:32:48 AM
+    Entry Cost:    $745.00
+    Exit Proceeds: $710.00
+    P&L:           $-35.00 (-4.70%)
+    Duration:      0 days 00:01:52.624591
+
+  Trade #3:
+    BUY:  5 contracts @ $1.4900  |  09:30:55 AM
+    SELL: 5 contracts @ $1.4200  |  09:33:44 AM
+    Entry Cost:    $745.00
+    Exit Proceeds: $710.00
+    P&L:           $-35.00 (-4.70%)
+    Duration:      0 days 00:02:48.967251
+
+  Trade #4:
+    BUY:  5 contracts @ $1.4900  |  09:30:55 AM
+    SELL: 5 contracts @ $1.2300  |  09:34:40 AM
+    Entry Cost:    $745.00
+    Exit Proceeds: $615.00
+    P&L:           $-130.00 (-17.45%)
+    Duration:      0 days 00:03:45.195598
+
+  Trade #5:
+    BUY:  5 contracts @ $1.4900  |  09:30:55 AM
+    SELL: 5 contracts @ $1.2500  |  09:35:37 AM
+    Entry Cost:    $745.00
+    Exit Proceeds: $625.00
+    P&L:           $-120.00 (-16.11%)
+    Duration:      0 days 00:04:41.602214
+
+  Trade #6:
+    BUY:  5 contracts @ $1.4900  |  09:30:55 AM
+    SELL: 5 contracts @ $1.2700  |  09:36:33 AM
+    Entry Cost:    $745.00
+    Exit Proceeds: $635.00
+    P&L:           $-110.00 (-14.77%)
+    Duration:      0 days 00:05:37.944120
+
+  Trade #7:
+    BUY:  3 contracts @ $1.4900  |  09:30:55 AM
+    SELL: 3 contracts @ $0.9400  |  09:43:08 AM
+    Entry Cost:    $447.00
+    Exit Proceeds: $282.00
+    P&L:           $-165.00 (-36.91%)
+    Duration:      0 days 00:12:12.645591
+
+  Trade #8:
+    BUY:  5 contracts @ $1.1700  |  09:44:05 AM
+    SELL: 5 contracts @ $1.1500  |  09:45:01 AM
+    Entry Cost:    $585.00
+    Exit Proceeds: $575.00
+    P&L:           $-10.00 (-1.71%)
+    Duration:      0 days 00:00:56.377322
+
+  Trade #9:
+    BUY:  5 contracts @ $1.1700  |  09:44:05 AM
+    SELL: 5 contracts @ $1.1100  |  09:45:57 AM
+    Entry Cost:    $585.00
+    Exit Proceeds: $555.00
+    P&L:           $-30.00 (-5.13%)
+    Duration:      0 days 00:01:52.611657
+
+  Trade #10:
+    BUY:  5 contracts @ $1.1700  |  09:44:05 AM
+    SELL: 5 contracts @ $1.1300  |  09:46:54 AM
+    Entry Cost:    $585.00
+    Exit Proceeds: $565.00
+    P&L:           $-20.00 (-3.42%)
+    Duration:      0 days 00:02:49.343228
+
+  Trade #11:
+    BUY:  5 contracts @ $1.1700  |  09:44:05 AM
+    SELL: 5 contracts @ $1.1200  |  09:47:50 AM
+    Entry Cost:    $585.00
+    Exit Proceeds: $560.00
+    P&L:           $-25.00 (-4.27%)
+    Duration:      0 days 00:03:45.623893
+
+  Trade #12:
+    BUY:  5 contracts @ $1.1700  |  09:44:05 AM
+    SELL: 5 contracts @ $0.9000  |  09:48:47 AM
+    Entry Cost:    $585.00
+    Exit Proceeds: $450.00
+    P&L:           $-135.00 (-23.08%)
+    Duration:      0 days 00:04:42.111240
+
+  Trade #13:
+    BUY:  5 contracts @ $1.1700  |  09:44:05 AM
+    SELL: 5 contracts @ $1.0100  |  09:49:43 AM
+    Entry Cost:    $585.00
+    Exit Proceeds: $505.00
+    P&L:           $-80.00 (-13.68%)
+    Duration:      0 days 00:05:38.557594
+
+  Trade #14:
+    BUY:  5 contracts @ $1.1700  |  09:44:05 AM
+    SELL: 5 contracts @ $0.9900  |  09:50:40 AM
+    Entry Cost:    $585.00
+    Exit Proceeds: $495.00
+    P&L:           $-90.00 (-15.38%)
+    Duration:      0 days 00:06:35.020604
+
+  Trade #15:
+    BUY:  1 contracts @ $1.1700  |  09:44:05 AM
+    SELL: 1 contracts @ $0.6800  |  10:14:08 AM
+    Entry Cost:    $117.00
+    Exit Proceeds: $68.00
+    P&L:           $-49.00 (-41.88%)
+    Duration:      0 days 00:30:03.234577
+
+====================================================================================================
+SUMMARY STATISTICS
+====================================================================================================
+
+Total Trades:        46
+Winning Trades:      18 (39.1%)
+Losing Trades:       27 (60.9%)
+Total P&L:           $-1,011.00
+Average Win:         $40.83
+Average Loss:        $-64.67
+Largest Win:         $80.00
+Largest Loss:        $-165.00
+Profit Factor:       0.42
+
+====================================================================================================
+OPEN POSITIONS
+====================================================================================================
+
+Symbol: SPY251208C00682000
+  Quantity:          1 contracts
+  Entry Premium:     $0.7200
+  Current Premium:   $1.6100
+  Entry Cost:        $72.00
+  Current Value:     $161.00
+  Unrealized P&L:    $89.00 (+123.61%)
+
+====================================================================================================
+END OF REPORT
+====================================================================================================

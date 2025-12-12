@@ -73,18 +73,18 @@ echo ""
 echo "🎯 Starting training..."
 echo "   Symbols: $SYMBOLS"
 echo "   Timesteps: $TIMESTEPS"
-echo "   Save frequency: Every $SAVE_FREQ steps"
+echo "   Save frequency: Every 50,000 steps (hardcoded in script)"
 echo "   Log file: $LOG_FILE"
 echo ""
 
 # Start training with nohup
+# Note: save_freq is hardcoded to 50000 in train_historical_model.py (CheckpointCallback)
 nohup python train_historical_model.py \
     --symbols "$SYMBOLS" \
     --start-date "$START_DATE" \
     --timesteps "$TIMESTEPS" \
     --use-greeks \
     --regime-balanced \
-    --save-freq "$SAVE_FREQ" \
     > "$LOG_FILE" 2>&1 &
 
 TRAINING_PID=$!

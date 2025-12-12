@@ -177,35 +177,142 @@ def calculate_position_size(premium: float, capital: float) -> int:
     return max(1, min(contracts, max_contracts))
 
 # ==================== OBSERVATION PREPARATION ====================
-def prepare_observation(data: pd.DataFrame, position: PositionTracker) -> np.ndarray:
-    """Prepare observation for RL model"""
-    if len(data) < LOOKBACK:
-        # Pad with last value
-        data = pd.concat([data.iloc[[0]] * (LOOKBACK - len(data)), data])
-    
+def prepare_observation(data: pd.DataFrame, vix_value: float, greeks_calc, position) -> np.ndarray:
+    """
+    Live observation builder — EXACT MATCH to training (20×23).
+    """
+
+    LOOKBACK = 20
     recent = data.tail(LOOKBACK).copy()
-    
-    # Normalize OHLC
-    ohlc = recent[['Open', 'High', 'Low', 'Close']].values
-    
-    # Normalize volume
-    volume = recent['Volume'].values.reshape(-1, 1)
-    if volume.max() > 0:
-        volume = volume / volume.max()
-    
-    # VIX approximation
-    vix = np.full((LOOKBACK, 1), 20.0) / 50.0
-    
-    # Position encoding
-    pos = np.full((LOOKBACK, 1), position.current_position)
-    
-    # Unrealized PnL (placeholder - would need real position data)
-    pnl = np.full((LOOKBACK, 1), 0.0)
-    
-    # Combine state
-    state = np.concatenate([ohlc, volume, vix, pos, pnl], axis=1)
-    
-    return state.astype(np.float32).reshape(1, LOOKBACK, 8)
+
+    # Extract OHLCV
+    closes = recent['Close'].astype(float).values
+    highs  = recent['High'].astype(float).values
+    lows   = recent['Low'].astype(float).values
+    opens  = recent['Open'].astype(float).values
+    vols   = recent['Volume'].astype(float).values
+
+    # Base price for normalization
+    base = float(closes[0]) if float(closes[0]) != 0 else 1.0
+
+    # Normalize OHLC (% change)
+    o = (opens  - base) / base * 100.0
+    h = (highs  - base) / base * 100.0
+    l = (lows   - base) / base * 100.0
+    c = (closes - base) / base * 100.0
+
+    # Normalized volume
+    maxv = vols.max() if vols.max() > 0 else 1.0
+    v = vols / maxv
+
+    # VIX features
+    vix_norm = np.full(LOOKBACK, (vix_value / 50.0) if vix_value else 0.4)
+    vix_delta_norm = np.full(LOOKBACK, 0.0)
+
+    # EMA 9/20 diff
+    def ema(arr, span):
+        return pd.Series(arr).ewm(span=span, adjust=False).mean().values
+
+    ema9  = ema(closes, 9)
+    ema20 = ema(closes, 20)
+    ema_diff = np.tanh(((ema9 - ema20) / base * 100.0) / 0.5)
+
+    # VWAP distance
+    tp = (highs + lows + closes) / 3.0
+    cumv = np.cumsum(vols)
+    cumv[cumv == 0] = 1
+    vwap = np.cumsum(tp * vols) / cumv
+    vwap_dist = np.tanh(((closes - vwap) / base * 100.0) / 0.5)
+
+    # RSI
+    delta = np.diff(closes, prepend=closes[0])
+    up  = np.where(delta > 0, delta, 0)
+    down = np.where(delta < 0, -delta, 0)
+    rs = pd.Series(up).ewm(alpha=1/14, adjust=False).mean().values / \
+         np.maximum(pd.Series(down).ewm(alpha=1/14, adjust=False).mean().values, 1e-9)
+    rsi_scaled = (100 - (100 / (1 + rs)) - 50) / 50
+
+    # MACD histogram
+    macd = ema(closes, 12) - ema(closes, 26)
+    signal = pd.Series(macd).ewm(span=9, adjust=False).mean().values
+    macd_hist = np.tanh(((macd - signal) / base * 100.0) / 0.3)
+
+    # ATR
+    prev_close = np.roll(closes, 1)
+    prev_close[0] = closes[0]
+    tr = np.maximum(highs - lows, np.maximum(abs(highs - prev_close), abs(lows - prev_close)))
+    atr = pd.Series(tr).rolling(14, min_periods=1).mean().values
+    atr_scaled = np.tanh(((atr / base) * 100.0) / 1.0)
+
+    # Candle structure
+    rng = np.maximum(highs - lows, 1e-9)
+    body_ratio = abs(closes - opens) / rng
+    wick_ratio = (rng - abs(closes - opens)) / rng
+
+    # Pullback
+    roll_high = pd.Series(highs).rolling(LOOKBACK, min_periods=1).max().values
+    pullback = np.tanh((((closes - roll_high) / np.maximum(roll_high, 1e-9)) * 100.0) / 0.5)
+
+    # Breakout
+    prior_high = pd.Series(highs).rolling(10, min_periods=1).max().shift(1).fillna(highs[0]).values
+    breakout = np.tanh(((closes - prior_high) / np.maximum(atr, 1e-9)) / 1.5)
+
+    # Trend slope
+    slope = np.polyfit(np.arange(LOOKBACK), closes, 1)[0]
+    trend_slope = np.full(LOOKBACK, np.tanh(((slope / base) * 100.0) / 0.05))
+
+    # Momentum burst
+    vol_z = (v - v.mean()) / (v.std() + 1e-9)
+    impulse = abs(delta) / base * 100.0
+    burst = np.tanh((vol_z * impulse) / 2.0)
+
+    # Trend strength
+    trend_strength = np.tanh((abs(ema_diff) + abs(macd_hist) + abs(vwap_dist)) / 1.5)
+
+    # Greeks (delta/gamma/theta/vega)
+    greeks = np.zeros((LOOKBACK, 4), dtype=np.float32)
+    if position and greeks_calc:
+        g = greeks_calc.calculate_greeks(
+            S=closes[-1],
+            K=position["strike"],
+            T=(1.0 / (252 * 6.5)),
+            sigma=(vix_value / 100.0) * 1.3,
+            option_type=position["option_type"]
+        )
+        greeks[:] = [
+            [
+                float(np.clip(g.get("delta", 0), -1, 1)),
+                float(np.tanh(g.get("gamma", 0) * 100)),
+                float(np.tanh(g.get("theta", 0) / 10)),
+                float(np.tanh(g.get("vega", 0) / 10)),
+            ]
+        ]
+
+    # FINAL OBSERVATION
+    obs = np.column_stack([
+        o, h, l, c, v,
+        vix_norm,
+        vix_delta_norm,
+        ema_diff,
+        vwap_dist,
+        rsi_scaled,
+        macd_hist,
+        atr_scaled,
+        body_ratio,
+        wick_ratio,
+        pullback,
+        breakout,
+        trend_slope,
+        burst,
+        trend_strength,
+        greeks[:,0],
+        greeks[:,1],
+        greeks[:,2],
+        greeks[:,3],
+    ]).astype(np.float32)
+
+    return obs
+
 
 # ==================== ORDER EXECUTION ====================
 def execute_buy_call(api: tradeapi.REST, current_price: float, capital: float) -> bool:

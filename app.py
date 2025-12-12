@@ -147,6 +147,18 @@ get_market_status()
 # === PORTFOLIO VALUE BAR (ALPACA STYLE) ===
 def get_portfolio_bar_data():
     """Get portfolio value, P&L, and today's trade stats"""
+    # Check if API keys are configured (basic validation)
+    if not config.ALPACA_KEY or config.ALPACA_KEY == 'YOUR_ALPACA_PAPER_KEY' or len(config.ALPACA_KEY) < 20:
+        return {
+            'portfolio_value': 100000.0,
+            'daily_pnl_pct': 0.0,
+            'daily_pnl_dollar': 0.0,
+            'num_trades_today': 0,
+            'today_pnl': 0.0,
+            'realized_pnl': 0.0,
+            'error': 'Alpaca API keys not configured. Set APCA_API_KEY_ID and APCA_API_SECRET_KEY environment variables.'
+        }
+    
     try:
         api = tradeapi.REST(
             config.ALPACA_KEY,
@@ -330,7 +342,7 @@ def get_portfolio_bar_data():
                                         except (ValueError, TypeError):
                                             pass
                             except Exception:
-                                pass
+                                continue
                         
                         # Fallback uses old counting method - set defaults
                         num_trades_today = len([t for t in today_trades if t.get('action') == 'BUY'])
@@ -356,17 +368,35 @@ def get_portfolio_bar_data():
             'today_pnl': realized_pnl  # Show realized P&L (same as report)
         }
     except Exception as e:
+        error_msg = str(e)
+        # Check if it's an API key/authentication error
+        if 'Key ID' in error_msg or 'API key' in error_msg or 'APCA_API_KEY_ID' in error_msg or 'authentication' in error_msg.lower() or 'unauthorized' in error_msg.lower():
+            return {
+                'portfolio_value': 100000.0,
+                'daily_pnl_pct': 0.0,
+                'daily_pnl_dollar': 0.0,
+                'num_trades_today': 0,
+                'today_pnl': 0.0,
+                'realized_pnl': 0.0,
+                'error': f"Alpaca API key error: {error_msg}. Please set APCA_API_KEY_ID and APCA_API_SECRET_KEY environment variables."
+            }
+        # Other errors (network, timeout, etc.) - return default values without error message
+        # This allows dashboard to show default values when API is temporarily unavailable
         return {
             'portfolio_value': 100000.0,
             'daily_pnl_pct': 0.0,
             'daily_pnl_dollar': 0.0,
             'num_trades_today': 0,
-            'realized_pnl': 0.0,
-            'unrealized_pnl': 0.0,
-            'today_pnl': 0.0
+            'today_pnl': 0.0,
+            'realized_pnl': 0.0
         }
 
 portfolio_data = get_portfolio_bar_data()
+
+# Show error if API key issue
+if 'error' in portfolio_data:
+    st.error(portfolio_data['error'])
+    st.info("💡 **To fix:** Set these environment variables on Railway/local:\n- `APCA_API_KEY_ID`\n- `APCA_API_SECRET_KEY`\n- `APCA_API_BASE_URL` (optional, defaults to paper trading)")
 
 # Portfolio bar in Alpaca style
 pnl_color = "#ef4444" if portfolio_data['daily_pnl_pct'] < 0 else "#10b981"
@@ -440,7 +470,7 @@ if st.session_state.get('run_backtest', False):
             if results:
                 st.success("✅ Backtest Complete!")
                 df_results = pd.DataFrame(results)
-                st.dataframe(df_results, use_container_width=True, hide_index=True)
+                st.dataframe(df_results, width='stretch', hide_index=True)
                 
                 col1, col2, col3 = st.columns(3)
                 with col1:
@@ -465,6 +495,10 @@ if st.session_state.get('run_backtest', False):
 # === CURRENT POSITIONS TABLE (ALPACA) ===
 def get_alpaca_positions():
     """Fetch current positions from Alpaca API"""
+    # Check if API keys are configured (basic validation)
+    if not config.ALPACA_KEY or config.ALPACA_KEY == 'YOUR_ALPACA_PAPER_KEY' or len(config.ALPACA_KEY) < 20:
+        return pd.DataFrame()
+    
     try:
         api = tradeapi.REST(
             config.ALPACA_KEY,
@@ -515,7 +549,10 @@ def get_alpaca_positions():
         
         return pd.DataFrame(positions_data)
     except Exception as e:
-        st.error(f"Error fetching Alpaca positions: {e}")
+        error_msg = str(e)
+        # Don't show error in UI if it's just API key issue (already shown in portfolio section)
+        if 'Key ID' not in error_msg and 'API key' not in error_msg and 'APCA_API_KEY_ID' not in error_msg:
+            st.error(f"Error fetching Alpaca positions: {e}")
         return pd.DataFrame()
 
 st.markdown("### Current Positions")
@@ -524,7 +561,7 @@ positions_df = get_alpaca_positions()
 if not positions_df.empty:
     st.dataframe(
         positions_df,
-        use_container_width=True,
+        width='stretch',
         hide_index=True,
         height=200
     )
@@ -608,14 +645,14 @@ def get_trading_history_alpaca_style():
             api_version='v2'
         )
         
-        # Get filled orders from Alpaca (last 100 to ensure we have enough)
+        # Get filled orders from Alpaca (increased limit to get all historical trades)
         try:
-            orders = api.list_orders(status='filled', limit=100, nested=False)
+            orders = api.list_orders(status='filled', limit=500, nested=False)
         except Exception as e:
             st.warning(f"Could not fetch orders from Alpaca: {e}, using database fallback")
             orders = []
         
-        # Filter for option orders AND 0DTE only
+        # Filter for option orders AND 0DTE only (NO DATE FILTER - keep all trades)
         option_orders = []
         for order in orders:
             symbol = order.symbol
@@ -623,37 +660,43 @@ def get_trading_history_alpaca_style():
             if len(symbol) >= 10 and (('C' in symbol[-9:] and symbol[-9:][-1].isdigit()) or 
                                       ('P' in symbol[-9:] and symbol[-9:][-1].isdigit()) or
                                       symbol.startswith('SPY') or symbol.startswith('QQQ') or symbol.startswith('SPX')):
-                # Only include 0DTE trades
+                # Only include 0DTE trades (but keep ALL dates, not just today)
                 if is_0dte_option(symbol):
                     option_orders.append(order)
         
         # If we have Alpaca orders, use them
         if option_orders:
-            # Sort by filled_at (newest first) and take last 20
+            # Sort by filled_at (newest first) - show all trades, not just 20
             try:
                 option_orders.sort(key=lambda x: x.filled_at if x.filled_at else x.submitted_at, reverse=True)
             except:
                 pass
-            recent_orders = option_orders[:20]
+            recent_orders = option_orders  # Show all trades, not limited to 20
             
             # Format in Alpaca positions table style
             display_data = []
             for order in recent_orders:
-                # Format timestamp
+                # Format timestamps separately for Submitted At and Filled At
+                submitted_time = "N/A"
+                filled_time = "N/A"
+                
                 try:
-                    if order.filled_at:
-                        # Parse Alpaca timestamp format
-                        filled_dt = datetime.datetime.fromisoformat(order.filled_at.replace('Z', '+00:00'))
-                        filled_dt = filled_dt.astimezone(pytz.timezone('US/Eastern'))
-                        formatted_time = filled_dt.strftime('%b %d, %Y %I:%M:%S %p')
-                    elif order.submitted_at:
+                    # Parse Submitted At timestamp
+                    if order.submitted_at:
                         submitted_dt = datetime.datetime.fromisoformat(order.submitted_at.replace('Z', '+00:00'))
                         submitted_dt = submitted_dt.astimezone(pytz.timezone('US/Eastern'))
-                        formatted_time = submitted_dt.strftime('%b %d, %Y %I:%M:%S %p')
-                    else:
-                        formatted_time = "N/A"
+                        submitted_time = submitted_dt.strftime('%b %d, %Y %I:%M:%S %p')
                 except:
-                    formatted_time = "N/A"
+                    submitted_time = "N/A"
+                
+                try:
+                    # Parse Filled At timestamp
+                    if order.filled_at:
+                        filled_dt = datetime.datetime.fromisoformat(order.filled_at.replace('Z', '+00:00'))
+                        filled_dt = filled_dt.astimezone(pytz.timezone('US/Eastern'))
+                        filled_time = filled_dt.strftime('%b %d, %Y %I:%M:%S %p')
+                except:
+                    filled_time = "N/A"
                 
                 # Get fill price from Alpaca (most accurate)
                 fill_price = float(order.filled_avg_price) if hasattr(order, 'filled_avg_price') and order.filled_avg_price else 0.0
@@ -667,8 +710,8 @@ def get_trading_history_alpaca_style():
                     'Avg. Fill Price': f"{fill_price:.2f}" if fill_price > 0 else "N/A",
                     'Status': order.status if hasattr(order, 'status') else 'filled',
                     'Source': order.source if hasattr(order, 'source') else 'access_key',
-                    'Submitted At': formatted_time,
-                    'Filled At': formatted_time
+                    'Submitted At': submitted_time,
+                    'Filled At': filled_time
                 })
             
             return pd.DataFrame(display_data)
@@ -700,17 +743,44 @@ def get_trading_history_alpaca_style():
         if not all_trades:
             return pd.DataFrame()
         
-        recent_trades = all_trades[-20:]
+        # Show all trades, not just last 20 (NO DATE FILTER - keep all trades)
+        recent_trades = all_trades[:]  # Show all trades
         recent_trades.reverse()
         
         display_data = []
         for trade in recent_trades:
-            timestamp = trade['timestamp']
+            # Get submitted_at and filled_at from database
+            submitted_time = trade.get('submitted_at', '')
+            filled_time = trade.get('filled_at', '')
+            
+            # If not in database, fall back to timestamp
+            if not submitted_time:
+                timestamp = trade.get('timestamp', '')
+                try:
+                    dt = datetime.datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S')
+                    submitted_time = dt.strftime('%b %d, %Y %I:%M:%S %p')
+                except:
+                    submitted_time = timestamp if timestamp else "N/A"
+            
+            if not filled_time:
+                filled_time = submitted_time  # Use submitted time as fallback
+            
+            # Format timestamps if they're in ISO format
             try:
-                dt = datetime.datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S')
-                formatted_time = dt.strftime('%b %d, %Y %I:%M:%S %p')
+                if submitted_time and 'T' in submitted_time:
+                    submitted_dt = datetime.datetime.fromisoformat(submitted_time.replace('Z', '+00:00'))
+                    submitted_dt = submitted_dt.astimezone(pytz.timezone('US/Eastern'))
+                    submitted_time = submitted_dt.strftime('%b %d, %Y %I:%M:%S %p')
             except:
-                formatted_time = timestamp
+                pass
+            
+            try:
+                if filled_time and 'T' in filled_time:
+                    filled_dt = datetime.datetime.fromisoformat(filled_time.replace('Z', '+00:00'))
+                    filled_dt = filled_dt.astimezone(pytz.timezone('US/Eastern'))
+                    filled_time = filled_dt.strftime('%b %d, %Y %I:%M:%S %p')
+            except:
+                pass
             
             # Use premium price instead of strike price
             if trade['action'] == 'BUY':
@@ -741,8 +811,8 @@ def get_trading_history_alpaca_style():
                 'Avg. Fill Price': f"{fill_price:.2f}" if fill_price > 0 else "N/A",
                 'Status': 'filled',
                 'Source': 'access_key',
-                'Submitted At': formatted_time,
-                'Filled At': formatted_time
+                'Submitted At': submitted_time if submitted_time else "N/A",
+                'Filled At': filled_time if filled_time else "N/A"
             })
         
         return pd.DataFrame(display_data)
@@ -755,7 +825,7 @@ history_df = get_trading_history_alpaca_style()
 if not history_df.empty:
     st.dataframe(
         history_df,
-        use_container_width=True,
+        width='stretch',
         hide_index=True,
         height=300
     )

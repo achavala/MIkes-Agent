@@ -50,8 +50,68 @@ class HistoricalDataCollector:
     def __init__(self, cache_dir: str = "data/historical"):
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.symbols = ['SPY', 'QQQ', '^SPX']
-        self.symbol_map = {'SPY': 'SPY', 'QQQ': 'QQQ', 'SPX': '^SPX'}
+        self.symbols = ['SPY', 'QQQ', '^GSPC']
+        # yfinance uses ^GSPC for S&P 500 index (more reliable than ^SPX)
+        self.symbol_map = {'SPY': 'SPY', 'QQQ': 'QQQ', 'SPX': '^GSPC'}
+        # Polygon/Massive ticker mapping (for true intraday minute bars)
+        # Indices on Polygon use the "I:" prefix (e.g., I:SPX).
+        self.massive_symbol_map = {'SPY': 'SPY', 'QQQ': 'QQQ', 'SPX': 'I:SPX'}
+
+    def get_historical_data_massive(
+        self,
+        symbol: str,
+        start_date: str,
+        end_date: Optional[str] = None,
+        interval: str = "1m",
+        use_cache: bool = True,
+    ) -> pd.DataFrame:
+        """
+        Get historical OHLCV data from Massive/Polygon (preferred for intraday 1m bars).
+
+        Requires MASSIVE_API_KEY env var.
+        Caches results to disk.
+        """
+        if end_date is None:
+            end_date = datetime.now().strftime("%Y-%m-%d")
+
+        # Cache file path (separate from yfinance cache to avoid collisions)
+        safe_symbol = symbol.replace(":", "_")
+        cache_file = self.cache_dir / f"{safe_symbol}_{interval}_{start_date}_{end_date}_massive.pkl"
+
+        if use_cache and cache_file.exists():
+            print(f"📂 Loading cached Massive data: {cache_file.name}")
+            try:
+                with open(cache_file, "rb") as f:
+                    df = pickle.load(f)
+                if isinstance(df, pd.DataFrame):
+                    return df
+            except Exception as e:
+                print(f"⚠️ Massive cache load failed: {e}, downloading fresh data")
+
+        # Lazy import to keep base env light
+        try:
+            from massive_api_client import MassiveAPIClient
+        except Exception as e:
+            raise ImportError("massive_api_client.py not available; cannot use Massive/Polygon data source") from e
+
+        massive_symbol = self.massive_symbol_map.get(symbol, symbol)
+        client = MassiveAPIClient()
+        print(f"📥 Massive/Polygon download: {symbol} ({massive_symbol}) {start_date}→{end_date} ({interval})")
+        df = client.get_historical_data(massive_symbol, start_date=start_date, end_date=end_date, interval=interval)
+
+        # Basic hygiene
+        if isinstance(df.index, pd.DatetimeIndex):
+            df = df.sort_index()
+            df = df[~df.index.duplicated(keep="last")]
+
+        # Cache
+        try:
+            with open(cache_file, "wb") as f:
+                pickle.dump(df, f)
+        except Exception as e:
+            print(f"⚠️ Could not write Massive cache: {e}")
+
+        return df
         
     def get_historical_data(
         self,
@@ -341,7 +401,8 @@ class HistoricalTradingEnv(gym.Env):
         window_size: int = 20,
         initial_capital: float = 100000.0,
         use_greeks: bool = True,
-        use_features: bool = False
+        use_features: bool = False,
+        human_momentum_mode: bool = False
     ):
         super().__init__()
         
@@ -362,6 +423,7 @@ class HistoricalTradingEnv(gym.Env):
         self.use_features = use_features
         self.use_greeks = use_greeks
         self.feature_engine = InstitutionalFeatureEngine(lookback_minutes=window_size) if FEATURES_AVAILABLE and use_features else None
+        self.human_momentum_mode = human_momentum_mode
         
         # Position tracking
         self.position = None  # {symbol, qty, entry_premium, entry_price, strike, option_type, entry_time}
@@ -373,6 +435,14 @@ class HistoricalTradingEnv(gym.Env):
         if use_features and self.feature_engine:
             # Use institutional features (500+ features)
             obs_shape = (window_size, 130)  # Approximate feature count
+        elif self.human_momentum_mode:
+            # Human-style momentum/context features (scalp focused)
+            # OHLC returns (4) + volume (1) + VIX (1) + VIX delta (1)
+            # + EMA diff (1) + VWAP dist (1) + RSI (1) + MACD hist (1) + ATR (1)
+            # + candle body ratio (1) + wick ratio (1) + pullback % (1) + breakout score (1)
+            # + trend slope (1) + momentum burst (1) + trend strength (1)
+            # + Greeks (4) = 23
+            obs_shape = (window_size, 23)
         elif use_greeks and self.greeks_calc:
             # OHLCV + VIX + Greeks + Position
             obs_shape = (window_size, 10)  # 5 OHLCV + 1 VIX + 4 Greeks
@@ -402,6 +472,17 @@ class HistoricalTradingEnv(gym.Env):
         self.realized_pnl = 0.0
         self.trade_history = []
         return self._get_obs(), {}
+
+    def action_masks(self) -> np.ndarray:
+        """
+        Action masking support (for MaskablePPO).
+        True = allowed, False = masked out.
+        """
+        # 0=HOLD, 1=BUY_CALL, 2=BUY_PUT, 3=TRIM_50, 4=TRIM_70, 5=EXIT
+        if self.position is None:
+            return np.array([True, True, True, False, False, False], dtype=bool)
+        # When in a position: allow HOLD/TRIM/EXIT; disallow opening another position
+        return np.array([True, False, False, True, True, True], dtype=bool)
     
     def _get_obs(self) -> np.ndarray:
         """Get current observation"""
@@ -439,6 +520,154 @@ class HistoricalTradingEnv(gym.Env):
         else:
             # Basic OHLCV
             ohlcv = window_data[required_cols].values.astype(np.float32)
+
+            # Human momentum mode: compute technical/context features per bar
+            if self.human_momentum_mode:
+                closes = window_data['close'].astype(float).values
+                highs = window_data['high'].astype(float).values
+                lows = window_data['low'].astype(float).values
+                opens = window_data['open'].astype(float).values
+                vols = window_data['volume'].astype(float).values
+
+                # Normalize OHLC as % change from first close in window (stable scale)
+                base = float(closes[0]) if float(closes[0]) != 0.0 else 1.0
+                o = (opens - base) / base * 100.0
+                h = (highs - base) / base * 100.0
+                l = (lows - base) / base * 100.0
+                c = (closes - base) / base * 100.0
+
+                # Volume normalized to max in window
+                maxv = float(vols.max()) if float(vols.max()) > 0 else 1.0
+                v = vols / maxv
+
+                # VIX (constant across window)
+                vix = self._get_vix(current_time)
+                vix_norm = np.full(self.window_size, (vix / 50.0) if vix else 0.4, dtype=np.float32)
+                # VIX delta (day-over-day) normalized
+                try:
+                    vix_prev = float(self.vix_data.iloc[-2]) if len(self.vix_data) > 1 else float(vix)
+                    vix_delta = float(vix) - float(vix_prev)
+                except Exception:
+                    vix_delta = 0.0
+                vix_delta_norm = np.full(self.window_size, np.tanh(vix_delta / 5.0), dtype=np.float32)
+
+                # EMA 9/20 diff (scaled)
+                def ema(arr, span: int):
+                    return pd.Series(arr).ewm(span=span, adjust=False).mean().values
+
+                ema9 = ema(closes, 9)
+                ema20 = ema(closes, 20)
+                ema_diff = (ema9 - ema20) / base * 100.0  # % of price
+                ema_diff = np.tanh(ema_diff / 0.5)  # squash
+
+                # VWAP distance (%)
+                # typical price * volume cumulative / cum volume
+                tp = (highs + lows + closes) / 3.0
+                cumv = np.cumsum(vols)
+                cumv[cumv == 0] = 1.0
+                vwap = np.cumsum(tp * vols) / cumv
+                vwap_dist = (closes - vwap) / base * 100.0
+                vwap_dist = np.tanh(vwap_dist / 0.5)
+
+                # RSI(14) scaled to [-1,1]
+                delta = np.diff(closes, prepend=closes[0])
+                up = np.where(delta > 0, delta, 0.0)
+                down = np.where(delta < 0, -delta, 0.0)
+                roll = 14
+                up_ema = pd.Series(up).ewm(alpha=1/roll, adjust=False).mean().values
+                down_ema = pd.Series(down).ewm(alpha=1/roll, adjust=False).mean().values
+                rs = up_ema / np.maximum(down_ema, 1e-9)
+                rsi = 100.0 - (100.0 / (1.0 + rs))
+                rsi_scaled = (rsi - 50.0) / 50.0
+
+                # MACD histogram (12,26,9) scaled
+                macd = ema(closes, 12) - ema(closes, 26)
+                signal = pd.Series(macd).ewm(span=9, adjust=False).mean().values
+                macd_hist = (macd - signal) / base * 100.0
+                macd_hist = np.tanh(macd_hist / 0.3)
+
+                # ATR(14) normalized by price
+                prev_close = np.roll(closes, 1)
+                prev_close[0] = closes[0]
+                tr = np.maximum(highs - lows, np.maximum(np.abs(highs - prev_close), np.abs(lows - prev_close)))
+                atr = pd.Series(tr).rolling(14, min_periods=1).mean().values
+                atr_pct = (atr / base) * 100.0
+                atr_scaled = np.tanh(atr_pct / 1.0)
+
+                # Candle structure: body ratio + wick ratio (per bar)
+                rng = np.maximum(highs - lows, 1e-9)
+                body = np.abs(closes - opens)
+                body_ratio = body / rng
+                wick_ratio = (rng - body) / rng
+
+                # Pullback % from rolling high (negative values = pullback)
+                roll_high = pd.Series(highs).rolling(self.window_size, min_periods=1).max().values
+                pullback = (closes - roll_high) / np.maximum(roll_high, 1e-9) * 100.0
+                pullback = np.tanh(pullback / 0.5)
+
+                # Breakout score: close vs prior rolling high, normalized by ATR
+                prior_high = pd.Series(highs).rolling(10, min_periods=1).max().shift(1).fillna(highs[0]).values
+                breakout = (closes - prior_high) / np.maximum(atr, 1e-9)
+                breakout = np.tanh(breakout / 1.5)
+
+                # Trend slope (linear regression) scaled
+                x = np.arange(self.window_size)
+                # slope per window, but broadcast as constant series for stability
+                try:
+                    slope = np.polyfit(x, closes, 1)[0]
+                except Exception:
+                    slope = 0.0
+                slope_pct = (slope / base) * 100.0
+                trend_slope = np.full(self.window_size, np.tanh(slope_pct / 0.05), dtype=np.float32)
+
+                # Momentum burst: volume spike * return impulse (proxy)
+                vol_z = (v - np.mean(v)) / (np.std(v) + 1e-9)
+                ret = np.diff(closes, prepend=closes[0]) / base * 100.0
+                impulse = np.abs(ret)
+                burst = np.tanh((vol_z * impulse) / 2.0)
+
+                # Trend strength score: combine EMA diff + MACD hist + VWAP dist (squashed)
+                trend_strength = np.tanh((np.abs(ema_diff) + np.abs(macd_hist) + np.abs(vwap_dist)) / 1.5)
+
+                # Greeks (scaled/squashed, same across window)
+                greeks_array = np.zeros((self.window_size, 4), dtype=np.float32)
+                if self.use_greeks and self.greeks_calc and self.position:
+                    strike = self.position['strike']
+                    option_type = self.position['option_type']
+                    T = 1.0 / (252 * 6.5)
+                    sigma = (vix / 100.0) * 1.3 if vix else 0.20
+                    g = self.greeks_calc.calculate_greeks(S=current_price, K=strike, T=T, sigma=sigma, option_type=option_type)
+                    d = float(np.clip(g.get('delta', 0.0), -1.0, 1.0))
+                    gam = float(np.tanh(float(g.get('gamma', 0.0)) * 100.0))
+                    the = float(np.tanh(float(g.get('theta', 0.0)) / 10.0))
+                    veg = float(np.tanh(float(g.get('vega', 0.0)) / 10.0))
+                    greeks_array[:] = np.array([d, gam, the, veg], dtype=np.float32)
+
+                obs = np.column_stack([
+                    o, h, l, c, v,
+                    vix_norm,
+                    vix_delta_norm,
+                    ema_diff,
+                    vwap_dist,
+                    rsi_scaled,
+                    macd_hist,
+                    atr_scaled,
+                    body_ratio,
+                    wick_ratio,
+                    pullback,
+                    breakout,
+                    trend_slope,
+                    burst,
+                    trend_strength,
+                    greeks_array[:, 0],  # delta
+                    greeks_array[:, 1],  # gamma
+                    greeks_array[:, 2],  # theta
+                    greeks_array[:, 3],  # vega
+                ]).astype(np.float32)
+
+                # Final safety clamp
+                obs = np.clip(obs, -10.0, 10.0)
+                return obs
             
             # Check if we need to add VIX and Greeks
             if self.use_greeks and self.greeks_calc:
@@ -532,23 +761,149 @@ class HistoricalTradingEnv(gym.Env):
         # Update position if exists
         if self.position:
             self._update_position(current_price, vix)
+
+            # ==================== HARD -15% "SEATBELT" STOP (MATCH LIVE RISK RULE) ====================
+            # In live trading, risk controls must force an exit regardless of RL preference.
+            # Teach the model this reality: once drawdown exceeds -15%, the position is closed.
+            if self.human_momentum_mode and self.position and self.position.get('cost', 0) > 0:
+                try:
+                    pnl_pct_now = float(self.unrealized_pnl) / float(self.position['cost'])
+                except Exception:
+                    pnl_pct_now = 0.0
+                if pnl_pct_now <= -0.15:
+                    info = {
+                        "forced_stop_loss": True,
+                        "forced_stop_pnl_pct": float(pnl_pct_now),
+                    }
+                    # Force full exit at current bar pricing (simulated premium)
+                    reward = float(self._execute_exit(current_price, vix))
+                    # Add steep penalty so PPO strongly avoids reaching this zone
+                    reward -= 0.8
+                    return self._get_obs(), reward, done, False, info
         
         # Execute action
         reward = 0.0
         info = {}
+
+        # ==================== HUMAN MOMENTUM ENTRY QUALITY / OPPORTUNITY SHAPING ====================
+        # When flat: compute a simple "setup score" proxy from recent window to:
+        # - reward GOOD buys (+bonus)
+        # - penalize missed obvious setups (HOLD when setup strong)
+        # - penalize chasing bad buys (e.g. RSI very high + rejection wick)
+        pre_action_flat = self.position is None
+        setup_score = 0.0
+        chase_penalty = 0.0
+        strong_setup = False
+        chase_setup = False
+        if self.human_momentum_mode and self.position is None and self.current_step >= self.window_size:
+            try:
+                window = self.data.iloc[self.current_step - self.window_size:self.current_step]
+                closes = window['close'].astype(float).values
+                highs = window['high'].astype(float).values
+                lows = window['low'].astype(float).values
+                opens = window['open'].astype(float).values
+                vols = window['volume'].astype(float).values
+                base = float(closes[0]) if float(closes[0]) != 0.0 else 1.0
+
+                # EMA9/EMA20 on close
+                ema9 = pd.Series(closes).ewm(span=9, adjust=False).mean().values
+                ema20 = pd.Series(closes).ewm(span=20, adjust=False).mean().values
+                ema_up = ema9[-1] > ema20[-1]
+
+                # VWAP reclaim proxy: close above vwap
+                tp = (highs + lows + closes) / 3.0
+                cumv = np.cumsum(vols); cumv[cumv == 0] = 1.0
+                vwap = (np.cumsum(tp * vols) / cumv)[-1]
+                vwap_up = closes[-1] > vwap
+
+                # RSI scaled
+                delta = np.diff(closes, prepend=closes[0])
+                up = np.where(delta > 0, delta, 0.0)
+                down = np.where(delta < 0, -delta, 0.0)
+                roll = 14
+                up_ema = pd.Series(up).ewm(alpha=1/roll, adjust=False).mean().values
+                down_ema = pd.Series(down).ewm(alpha=1/roll, adjust=False).mean().values
+                rs = up_ema[-1] / max(down_ema[-1], 1e-9)
+                rsi = 100.0 - (100.0 / (1.0 + rs))
+
+                # MACD hist sign
+                macd = pd.Series(closes).ewm(span=12, adjust=False).mean().values - pd.Series(closes).ewm(span=26, adjust=False).mean().values
+                sig = pd.Series(macd).ewm(span=9, adjust=False).mean().values
+                macd_pos = (macd[-1] - sig[-1]) > 0
+
+                # Candle rejection proxy (last candle)
+                rng = max(highs[-1] - lows[-1], 1e-9)
+                body = abs(closes[-1] - opens[-1])
+                wick_ratio = (rng - body) / rng
+                rejection = wick_ratio > 0.65
+
+                # Setup score (0..4)
+                setup_score = float(ema_up) + float(vwap_up) + float(macd_pos) + float(rsi > 50)
+
+                # Chasing penalty: RSI very high + rejection candle
+                # Keep small to avoid over-punishing (which would drive model back to HOLD)
+                if rsi > 80 and rejection:
+                    chase_penalty = -0.03  # Reduced from -0.07 to -0.03 to avoid over-punishment
+                    chase_setup = True
+
+                strong_setup = setup_score >= 3.0
+            except Exception:
+                setup_score = 0.0
+                chase_penalty = 0.0
+                strong_setup = False
+                chase_setup = False
+
+        # Expose telemetry for training diagnostics
+        if self.human_momentum_mode:
+            info.update({
+                "is_flat_pre": bool(pre_action_flat),
+                "setup_score": float(setup_score),
+                "strong_setup": bool(strong_setup),
+                "chase_setup": bool(chase_setup),
+            })
         
         if action == 0:  # HOLD
             reward = self._calculate_reward()
+            # Opportunity missed penalty (only when FLAT) - STRENGTHENED further to prevent slow recollapse
+            if self.human_momentum_mode and self.position is None and setup_score >= 3.0:
+                reward -= 0.06  # Increased from -0.05 to -0.06 (sweet spot for scalper-style agent)
+                info["missed_opportunity"] = True
+            elif self.human_momentum_mode:
+                info["missed_opportunity"] = False
+                # Small per-step "time tax" on HOLD while flat (anti-collapse measure)
+                # Reduced from -0.001 to -0.0005 to avoid overwhelming PPO early
+                reward -= 0.0005
         
         elif action == 1:  # BUY_CALL
             if self.position is None:
                 reward = self._execute_buy_call(current_price, vix)
+                # Buy-strength bonus for good momentum entries - STRENGTHENED further to prevent slow recollapse
+                if self.human_momentum_mode and setup_score >= 3.0:
+                    reward += 0.12  # Increased from +0.10 to +0.12 to maintain strong BUY bias
+                    info["good_buy_bonus"] = True
+                elif self.human_momentum_mode:
+                    info["good_buy_bonus"] = False
+                # Penalize chasing bad buys (keep small to avoid over-punishing)
+                reward += chase_penalty
+                if self.human_momentum_mode:
+                    info["bad_chase_penalty"] = bool(chase_penalty != 0.0)
             else:
                 reward = -0.001  # Penalty for buying when already in position
         
         elif action == 2:  # BUY_PUT
             if self.position is None:
                 reward = self._execute_buy_put(current_price, vix)
+                # For puts, reuse the same setup_score proxy as a weak placeholder.
+                # (In a future version we'd compute bearish equivalents: EMA9<EMA20, VWAP reject, RSI<50, MACD<0)
+                # STRENGTHENED further to prevent slow recollapse
+                if self.human_momentum_mode and setup_score >= 3.0:
+                    reward += 0.10  # Increased from +0.08 to +0.10 to maintain strong BUY bias
+                    info["good_buy_bonus"] = True
+                elif self.human_momentum_mode:
+                    info["good_buy_bonus"] = False
+                reward += chase_penalty
+                if self.human_momentum_mode:
+                    info["bad_chase_penalty"] = bool(chase_penalty != 0.0)
             else:
                 reward = -0.001  # Penalty for buying when already in position
         
@@ -556,19 +911,20 @@ class HistoricalTradingEnv(gym.Env):
             if self.position:
                 reward = self._execute_trim(0.5, current_price, vix)
             else:
-                reward = -0.001  # Penalty for trim without position
+                # Stronger penalty in human_momentum_mode to prevent policy collapse into TRIM while flat
+                reward = -0.02 if self.human_momentum_mode else -0.001
         
         elif action == 4:  # TRIM_70%
             if self.position:
                 reward = self._execute_trim(0.7, current_price, vix)
             else:
-                reward = -0.001  # Penalty for trim without position
+                reward = -0.02 if self.human_momentum_mode else -0.001
         
         elif action == 5:  # EXIT
             if self.position:
                 reward = self._execute_exit(current_price, vix)
             else:
-                reward = 0.0  # No penalty for exit without position
+                reward = -0.01 if self.human_momentum_mode else 0.0  # discourage useless exits while flat in scalp mode
         
         return self._get_obs(), reward, done, False, info
     
@@ -609,7 +965,9 @@ class HistoricalTradingEnv(gym.Env):
         }
         
         self.capital -= cost
-        return 0.0  # No immediate reward
+        # Human scalp mode: small exploration/participation reward for taking entries
+        # (encourages higher trade frequency early in training)
+        return 0.02 if self.human_momentum_mode else 0.0
     
     def _execute_buy_put(self, price: float, vix: float) -> float:
         """Execute buy put order"""
@@ -648,7 +1006,7 @@ class HistoricalTradingEnv(gym.Env):
         }
         
         self.capital -= cost
-        return 0.0  # No immediate reward
+        return 0.02 if self.human_momentum_mode else 0.0
     
     def _execute_trim(self, trim_pct: float, price: float, vix: float) -> float:
         """Trim position (partial exit)"""
@@ -679,7 +1037,36 @@ class HistoricalTradingEnv(gym.Env):
         self.capital += proceeds
         
         # Calculate reward
-        reward = pnl_pct * trim_pct  # Reward based on P&L percentage
+        if not self.human_momentum_mode:
+            reward = pnl_pct * trim_pct  # Reward based on P&L percentage
+        else:
+            # Human scalp tiers: reward exiting into strength, punish trimming losers
+            # pnl_pct here is per-contract return on premium (approx)
+            tier = 0.0
+            if pnl_pct >= 2.0:
+                tier = 2.0
+            elif pnl_pct >= 1.0:
+                tier = 1.2
+            elif pnl_pct >= 0.7:
+                tier = 1.0
+            elif pnl_pct >= 0.5:
+                tier = 0.7
+            elif pnl_pct >= 0.3:
+                tier = 0.5
+            elif pnl_pct >= 0.2:
+                tier = 0.3
+            # losses: enforce -15% as a "hard unacceptable" zone
+            elif pnl_pct <= -0.15:
+                tier = -0.9
+            elif pnl_pct <= -0.4:
+                tier = -1.0
+            elif pnl_pct <= -0.3:
+                tier = -0.7
+            elif pnl_pct <= -0.2:
+                tier = -0.4
+            elif pnl_pct < 0:
+                tier = -0.2
+            reward = tier * float(trim_pct)
         
         if self.position['qty'] <= 0:
             self.position = None
@@ -726,7 +1113,35 @@ class HistoricalTradingEnv(gym.Env):
         self.position = None
         
         # Reward based on P&L
-        return pnl_pct * 0.1  # Scale reward
+        if not self.human_momentum_mode:
+            return pnl_pct * 0.1  # Scale reward
+
+        # Human scalp mode: tiered reward table (fast scalps + runners)
+        if pnl_pct >= 2.0:
+            return 2.0
+        if pnl_pct >= 1.0:
+            return 1.2
+        if pnl_pct >= 0.7:
+            return 1.0
+        if pnl_pct >= 0.5:
+            return 0.7
+        if pnl_pct >= 0.3:
+            return 0.5
+        if pnl_pct >= 0.2:
+            return 0.3
+        # losses
+        # Treat -15% as a "hard stop" zone (align with live max-loss rule)
+        if pnl_pct <= -0.15:
+            return -0.9
+        if pnl_pct <= -0.4:
+            return -1.0
+        if pnl_pct <= -0.3:
+            return -0.7
+        if pnl_pct <= -0.2:
+            return -0.4
+        if pnl_pct < 0:
+            return -0.2
+        return 0.0
     
     def _update_position(self, price: float, vix: float):
         """Update unrealized P&L for current position"""
@@ -752,10 +1167,27 @@ class HistoricalTradingEnv(gym.Env):
         """Calculate reward for current state"""
         if self.position:
             # Reward based on unrealized P&L
-            return (self.unrealized_pnl / self.position['cost']) * 0.01
+            pnl_pct = (self.unrealized_pnl / self.position['cost']) if self.position.get('cost', 0) else 0.0
+            if not self.human_momentum_mode:
+                return pnl_pct * 0.01
+
+            # Human scalp mode: encourage quick winners, punish slow losers
+            duration = max(1, self.current_step - self.position.get('entry_time', self.current_step))
+            # small positive if green, negative if red
+            shaped = pnl_pct * 0.05
+            # hard-loss zone: add steep ongoing penalty before forced stop triggers
+            if pnl_pct <= -0.15:
+                shaped -= 0.2
+            # time penalty: after ~30 minutes, holding costs reward
+            if duration > 30:
+                shaped -= min(0.05, (duration - 30) * 0.001)
+            # punish big drawdowns quickly
+            if pnl_pct <= -0.30:
+                shaped -= 0.3
+            return float(shaped)
         else:
             # Small negative reward for holding cash (encourage trading)
-            return -0.0001
+            return -0.0003 if self.human_momentum_mode else -0.0001
     
     def _calculate_final_reward(self) -> float:
         """Calculate final reward at episode end"""
