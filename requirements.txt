@@ -9,3 +9,8 @@ numpy==2.1.1
 pytz==2024.2
 requests>=2.31.0
 websockets>=9.0,<11  # For alpaca-trade-api compatibility
+plotly>=5.18.0
+psutil>=5.9.0
+fastapi>=0.110.0
+uvicorn>=0.29.0
+python-multipart>=0.0.9

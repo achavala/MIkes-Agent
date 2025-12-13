@@ -111,6 +111,46 @@ except ImportError:
     greeks_calc = None
     print("Warning: greeks_calculator module not found. Greeks will be set to zero.")
 
+# Import execution modeling
+try:
+    from execution_integration import integrate_execution_into_live, apply_execution_costs
+    from advanced_execution import initialize_execution_engine, get_execution_engine
+    EXECUTION_MODELING_AVAILABLE = True
+    # Initialize execution engine
+    initialize_execution_engine()
+except ImportError:
+    EXECUTION_MODELING_AVAILABLE = False
+    print("Warning: execution_integration module not found. Execution modeling disabled.")
+
+# Import portfolio Greeks manager
+try:
+    from portfolio_greeks_manager import initialize_portfolio_greeks, get_portfolio_greeks_manager
+    PORTFOLIO_GREEKS_AVAILABLE = True
+except ImportError:
+    PORTFOLIO_GREEKS_AVAILABLE = False
+    print("Warning: portfolio_greeks_manager module not found. Portfolio Greeks disabled.")
+
+# Import multi-agent ensemble
+try:
+    from multi_agent_ensemble import (
+        initialize_meta_router,
+        get_meta_router,
+        MetaPolicyRouter,
+        AgentType
+    )
+    MULTI_AGENT_ENSEMBLE_AVAILABLE = True
+except ImportError:
+    MULTI_AGENT_ENSEMBLE_AVAILABLE = False
+    print("Warning: multi_agent_ensemble module not found. Multi-agent ensemble disabled.")
+
+# Import drift detection
+try:
+    from drift_detection import initialize_drift_detector, get_drift_detector
+    DRIFT_DETECTION_AVAILABLE = True
+except ImportError:
+    DRIFT_DETECTION_AVAILABLE = False
+    print("Warning: drift_detection module not found. Drift detection disabled.")
+
 # Configuration: Use institutional features (set to False for backward compatibility)
 USE_INSTITUTIONAL_FEATURES = True  # Enable institutional-grade features
 
@@ -149,6 +189,98 @@ def get_iv_adjusted_risk(iv: float) -> float:
         return 0.07  # Normal → 7% (standard)
     else:
         return 0.04  # High IV → 4% (expensive, volatile)
+
+def calculate_dynamic_size_from_greeks(
+    base_size: int,
+    strike: float,
+    option_type: str,
+    current_price: float,
+    risk_mgr: RiskManager,
+    account_size: float
+) -> int:
+    """
+    Adjust position size based on portfolio Greeks limits (delta/vega)
+    
+    Args:
+        base_size: Base position size from IV-adjusted risk
+        strike: Option strike
+        option_type: 'call' or 'put'
+        current_price: Current underlying price
+        risk_mgr: RiskManager instance
+        account_size: Account size for Greeks calculations
+        
+    Returns:
+        Adjusted position size (may be reduced to stay within limits)
+    """
+    if not PORTFOLIO_GREEKS_AVAILABLE or not GREEKS_CALCULATOR_AVAILABLE or not greeks_calc:
+        return base_size  # No Greeks available, use base size
+    
+    try:
+        greeks_mgr = get_portfolio_greeks_manager()
+        if not greeks_mgr:
+            return base_size
+        
+        # Calculate Greeks for one contract
+        T = 1.0 / (252 * 6.5)  # 0DTE: ~1 hour
+        vix_value = risk_mgr.get_current_vix() if risk_mgr else 20.0
+        sigma = (vix_value / 100.0) * 1.3 if vix_value else 0.20
+        
+        per_contract_greeks = greeks_calc.calculate_greeks(
+            S=current_price,
+            K=strike,
+            T=T,
+            sigma=sigma,
+            option_type=option_type
+        )
+        
+        # Calculate max size that fits within limits
+        max_size = base_size
+        
+        # Check gamma limit (most restrictive for 0DTE)
+        max_gamma_dollar = account_size * 0.10  # 10% limit
+        current_gamma = abs(greeks_mgr.portfolio_gamma)
+        available_gamma = max_gamma_dollar - current_gamma
+        
+        if available_gamma > 0:
+            per_contract_gamma = abs(per_contract_greeks.get('gamma', 0) * 100)
+            if per_contract_gamma > 0:
+                max_size_by_gamma = int(available_gamma / per_contract_gamma)
+                max_size = min(max_size, max_size_by_gamma)
+        
+        # Check delta limit
+        max_delta_dollar = account_size * 0.20  # 20% limit
+        current_delta = abs(greeks_mgr.portfolio_delta)
+        available_delta = max_delta_dollar - current_delta
+        
+        if available_delta > 0:
+            per_contract_delta = abs(per_contract_greeks.get('delta', 0) * 100)
+            if per_contract_delta > 0:
+                max_size_by_delta = int(available_delta / per_contract_delta)
+                max_size = min(max_size, max_size_by_delta)
+        
+        # Check vega limit
+        max_vega_dollar = account_size * 0.15  # 15% limit
+        current_vega = abs(greeks_mgr.portfolio_vega)
+        available_vega = max_vega_dollar - current_vega
+        
+        if available_vega > 0:
+            per_contract_vega = abs(per_contract_greeks.get('vega', 0) * 100)
+            if per_contract_vega > 0:
+                max_size_by_vega = int(available_vega / per_contract_vega)
+                max_size = min(max_size, max_size_by_vega)
+        
+        # Ensure at least 1 contract if base_size > 0
+        if base_size > 0 and max_size < 1:
+            max_size = 1  # Allow at least 1 contract
+        
+        if max_size < base_size:
+            risk_mgr.log(f"📊 Greeks-based size adjustment: {base_size} → {max_size} (gamma/delta/vega limits)", "INFO")
+        
+        return max(1, max_size)  # Minimum 1 contract
+        
+    except Exception as e:
+        risk_mgr.log(f"⚠️ Error calculating dynamic size from Greeks: {e}, using base size", "WARNING")
+        return base_size
 
 # ==================== VOLATILITY REGIME ENGINE ====================
 # Full volatility regime system - adapts everything based on VIX like a $500M hedge fund
@@ -2015,7 +2147,38 @@ def prepare_observation_basic(data: pd.DataFrame, risk_mgr: RiskManager, symbol:
         except Exception:
             pass  # Keep zeros
     
-    # FINAL OBSERVATION (20 × 23)
+    # Portfolio Greeks (if available)
+    portfolio_delta_norm = np.full(LOOKBACK, 0.0, dtype=np.float32)
+    portfolio_gamma_norm = np.full(LOOKBACK, 0.0, dtype=np.float32)
+    portfolio_theta_norm = np.full(LOOKBACK, 0.0, dtype=np.float32)
+    portfolio_vega_norm = np.full(LOOKBACK, 0.0, dtype=np.float32)
+    
+    if PORTFOLIO_GREEKS_AVAILABLE:
+        try:
+            greeks_mgr = get_portfolio_greeks_manager()
+            if greeks_mgr:
+                exposure = greeks_mgr.get_current_exposure()
+                # Normalize Greeks to [-1, 1] range
+                # Delta: normalize by account size (assume max ±20% = ±2000 for $10k account)
+                account_size = exposure.get('account_size', 10000.0)
+                max_delta = account_size * 0.20  # 20% limit
+                portfolio_delta_norm[:] = np.clip(exposure.get('portfolio_delta', 0.0) / max_delta, -1, 1)
+                
+                # Gamma: normalize by account size (assume max 10% = 1000 for $10k account)
+                max_gamma = account_size * 0.10
+                portfolio_gamma_norm[:] = np.clip(exposure.get('portfolio_gamma', 0.0) / max_gamma, -1, 1)
+                
+                # Theta: normalize by daily burn limit (assume max $100/day)
+                max_theta = 100.0
+                portfolio_theta_norm[:] = np.clip(exposure.get('theta_daily_burn', 0.0) / max_theta, -1, 1)
+                
+                # Vega: normalize by account size (assume max 15% = 1500 for $10k account)
+                max_vega = account_size * 0.15
+                portfolio_vega_norm[:] = np.clip(exposure.get('portfolio_vega', 0.0) / max_vega, -1, 1)
+        except Exception as e:
+            pass  # Keep zeros if error
+    
+    # FINAL OBSERVATION (20 × 27) - Added 4 portfolio Greeks features
     obs = np.column_stack([
         o, h, l, c, v,
         vix_norm,
@@ -2036,6 +2199,10 @@ def prepare_observation_basic(data: pd.DataFrame, risk_mgr: RiskManager, symbol:
         greeks[:,1],
         greeks[:,2],
         greeks[:,3],
+        portfolio_delta_norm,
+        portfolio_gamma_norm,
+        portfolio_theta_norm,
+        portfolio_vega_norm,
     ]).astype(np.float32)
     
     return np.clip(obs, -10.0, 10.0)
@@ -2140,6 +2307,49 @@ def run_safe_live_trading():
                 risk_mgr.log("Trade database initialized - all trades will be saved permanently", "INFO")
             except Exception as e:
                 risk_mgr.log(f"Warning: Could not initialize trade database: {e}", "WARNING")
+        
+        # Initialize portfolio Greeks manager
+        if PORTFOLIO_GREEKS_AVAILABLE:
+            try:
+                account = api.get_account()
+                account_size = float(account.equity)
+                initialize_portfolio_greeks(account_size=account_size)
+                risk_mgr.log(f"✅ Portfolio Greeks Manager initialized (account size: ${account_size:,.2f})", "INFO")
+            except Exception as e:
+                risk_mgr.log(f"Warning: Could not initialize portfolio Greeks manager: {e}", "WARNING")
+        
+        # Log execution modeling status
+        if EXECUTION_MODELING_AVAILABLE:
+            risk_mgr.log("✅ Execution Modeling ENABLED (slippage + IV crush)", "INFO")
+        else:
+            risk_mgr.log("⚠️ Execution Modeling DISABLED (using simple market orders)", "WARNING")
+        
+        # Initialize multi-agent ensemble
+        if MULTI_AGENT_ENSEMBLE_AVAILABLE:
+            try:
+                meta_router = initialize_meta_router()
+                risk_mgr.log("✅ Multi-Agent Ensemble ENABLED (6 Agents + Meta-Router)", "INFO")
+                risk_mgr.log("  - Trend Agent: Momentum and trend following", "INFO")
+                risk_mgr.log("  - Reversal Agent: Mean reversion and contrarian", "INFO")
+                risk_mgr.log("  - Volatility Agent: Breakout and expansion detection", "INFO")
+                risk_mgr.log("  - Gamma Model Agent: Gamma exposure & convexity", "INFO")
+                risk_mgr.log("  - Delta Hedging Agent: Directional exposure management", "INFO")
+                risk_mgr.log("  - Macro Agent: Risk-on/risk-off regime detection", "INFO")
+                risk_mgr.log("  - Meta-Router: Hierarchical signal combination (Risk > Macro > Vol > Gamma > Trend > Reversal > RL)", "INFO")
+            except Exception as e:
+                risk_mgr.log(f"Warning: Could not initialize multi-agent ensemble: {e}", "WARNING")
+        else:
+            risk_mgr.log("⚠️ Multi-Agent Ensemble DISABLED", "WARNING")
+        
+        # Initialize drift detection
+        if DRIFT_DETECTION_AVAILABLE:
+            try:
+                drift_detector = initialize_drift_detector(window_size=50)
+                risk_mgr.log("✅ Drift Detection ENABLED (RL + Ensemble + Regime monitoring)", "INFO")
+            except Exception as e:
+                risk_mgr.log(f"Warning: Could not initialize drift detection: {e}", "WARNING")
+        else:
+            risk_mgr.log("⚠️ Drift Detection DISABLED", "WARNING")
     except Exception as e:
         print(f"✗ Initialization failed: {e}")
         return
@@ -2365,12 +2575,153 @@ def run_safe_live_trading():
                         
                         # 🔍 DEBUG: Log original RL action (before any remapping)
                         original_rl_action = rl_action  # Preserve original for logging
-                        risk_mgr.log(f"🔍 {sym} Action={rl_action}, Strength={action_strength:.3f} (temperature-calibrated)", "DEBUG")
+                        risk_mgr.log(f"🔍 {sym} RL Action={rl_action}, Strength={action_strength:.3f} (temperature-calibrated)", "DEBUG")
+                        
+                        # ========== MULTI-AGENT ENSEMBLE SIGNAL ==========
+                        ensemble_action = None
+                        ensemble_confidence = 0.0
+                        ensemble_details = None
+                        
+                        if MULTI_AGENT_ENSEMBLE_AVAILABLE:
+                            try:
+                                meta_router = get_meta_router()
+                                if meta_router:
+                                    # Prepare data for ensemble (ensure column names match)
+                                    ensemble_data = sym_hist.copy()
+                                    if 'Close' in ensemble_data.columns:
+                                        ensemble_data = ensemble_data.rename(columns={
+                                            'Open': 'open', 'High': 'high', 'Low': 'low',
+                                            'Close': 'close', 'Volume': 'volume'
+                                        })
+                                    
+                                    # Get ensemble signal
+                                    vix_value = risk_mgr.get_current_vix() if risk_mgr else 20.0
+                                    current_price_val = closes[-1] if 'close' in ensemble_data.columns else ensemble_data['Close'].iloc[-1]
+                                    strike_val = round(current_price_val)
+                                    
+                                    # Get portfolio delta if available
+                                    portfolio_delta_val = 0.0
+                                    delta_limit_val = 2000.0
+                                    if PORTFOLIO_GREEKS_AVAILABLE:
+                                        try:
+                                            greeks_mgr = get_portfolio_greeks_manager()
+                                            if greeks_mgr:
+                                                exposure = greeks_mgr.get_current_exposure()
+                                                portfolio_delta_val = exposure.get('portfolio_delta', 0.0)
+                                                account_size = exposure.get('account_size', 10000.0)
+                                                delta_limit_val = account_size * 0.20  # 20% limit
+                                        except Exception:
+                                            pass
+                                    
+                                    ensemble_action, ensemble_confidence, ensemble_details = meta_router.route(
+                                        data=ensemble_data,
+                                        vix=vix_value,
+                                        symbol=sym,
+                                        current_price=current_price_val,
+                                        strike=strike_val,
+                                        portfolio_delta=portfolio_delta_val,
+                                        delta_limit=delta_limit_val
+                                    )
+                                    
+                                    risk_mgr.log(
+                                        f"🎯 {sym} Ensemble: action={ensemble_action} ({get_action_name(ensemble_action)}), "
+                                        f"confidence={ensemble_confidence:.3f}, regime={ensemble_details.get('regime', 'unknown')}",
+                                        "INFO"
+                                    )
+                                    
+                                    # Log individual agent signals
+                                    signals = ensemble_details.get('signals', {})
+                                    for agent_name, signal_info in signals.items():
+                                        risk_mgr.log(
+                                            f"   {agent_name.upper()}: action={signal_info['action']} "
+                                            f"({get_action_name(signal_info['action'])}), "
+                                            f"conf={signal_info['confidence']:.3f}, "
+                                            f"weight={signal_info['weight']:.2f} | {signal_info['reasoning']}",
+                                            "DEBUG"
+                                        )
+                            except Exception as e:
+                                risk_mgr.log(f"⚠️ {sym} Ensemble analysis failed: {e}", "WARNING")
+                                import traceback
+                                risk_mgr.log(traceback.format_exc(), "DEBUG")
+                        
+                        # ========== COMBINE RL + ENSEMBLE SIGNALS ==========
+                        # Hierarchical combination: Risk > Macro > Volatility > Gamma > Trend > Reversal > RL
+                        # RL weight: 40% (lower priority in hierarchy)
+                        # Ensemble weight: 60% (higher priority)
+                        RL_WEIGHT = 0.40
+                        ENSEMBLE_WEIGHT = 0.60
+                        
+                        # Confidence override rules
+                        MIN_CONFIDENCE_THRESHOLD = 0.3
+                        
+                        if ensemble_action is not None:
+                            # Check for confidence overrides
+                            if ensemble_confidence < MIN_CONFIDENCE_THRESHOLD and action_strength > MIN_CONFIDENCE_THRESHOLD:
+                                # Ensemble too weak, use RL
+                                final_action = rl_action
+                                final_confidence = action_strength
+                                action_source = "RL (ensemble low confidence)"
+                                risk_mgr.log(
+                                    f"⚠️ {sym} Ensemble confidence too low ({ensemble_confidence:.2f}), using RL signal",
+                                    "WARNING"
+                                )
+                            elif action_strength < MIN_CONFIDENCE_THRESHOLD and ensemble_confidence > MIN_CONFIDENCE_THRESHOLD:
+                                # RL too weak, use ensemble
+                                final_action = ensemble_action
+                                final_confidence = ensemble_confidence
+                                action_source = "Ensemble (RL low confidence)"
+                                risk_mgr.log(
+                                    f"⚠️ {sym} RL confidence too low ({action_strength:.2f}), using ensemble signal",
+                                    "WARNING"
+                                )
+                            else:
+                                # Both have reasonable confidence: combine with hierarchical weights
+                                action_scores = {0: 0.0, 1: 0.0, 2: 0.0}  # HOLD, BUY_CALL, BUY_PUT
+                                
+                                # Ensemble contribution (higher weight - higher in hierarchy)
+                                if ensemble_action in action_scores:
+                                    action_scores[ensemble_action] += ENSEMBLE_WEIGHT * ensemble_confidence
+                                
+                                # RL contribution (lower weight - lower in hierarchy)
+                                if rl_action in action_scores:
+                                    action_scores[rl_action] += RL_WEIGHT * action_strength
+                                
+                                # Select winning action
+                                combined_action = max(action_scores, key=action_scores.get)
+                                combined_confidence = action_scores[combined_action]
+                                
+                                # Normalize confidence
+                                total_score = sum(action_scores.values())
+                                if total_score > 0:
+                                    combined_confidence = combined_confidence / total_score
+                                else:
+                                    combined_confidence = 0.0
+                                
+                                # Use combined signal
+                                final_action = combined_action
+                                final_confidence = combined_confidence
+                                action_source = "RL+Ensemble"
+                                
+                                risk_mgr.log(
+                                    f"🔀 {sym} Combined Signal: RL={rl_action}({action_strength:.2f}) + "
+                                    f"Ensemble={ensemble_action}({ensemble_confidence:.2f}) → "
+                                    f"Final={final_action}({final_confidence:.2f})",
+                                    "INFO"
+                                )
+                        else:
+                            # Use RL only if ensemble unavailable
+                            final_action = rl_action
+                            final_confidence = action_strength
+                            action_source = "RL"
+                        
+                        # Use final_action and final_confidence from combined signal (or RL if ensemble unavailable)
+                        action = final_action
+                        action_strength = final_confidence
                         
                         # If we're FLAT and the model keeps outputting TRIM/EXIT, resample stochastically.
                         # This preserves safety (we still only enter on BUY actions) while avoiding deadlock.
                         resampled = False
-                        if not risk_mgr.open_positions and rl_action in (3, 4, 5):
+                        if not risk_mgr.open_positions and action in (3, 4, 5):
                             try:
                                 sampled = []
                                 for _ in range(7):
@@ -2408,18 +2759,21 @@ def run_safe_live_trading():
                         # Model outputs: 0=HOLD, 1=BUY CALL, 2=BUY PUT, 3=TRIM 50%, 4=TRIM 70%, 5=FULL EXIT
                         # Only allow trim/exit actions if positions exist
                         masked = False
-                        if rl_action >= 3 and not risk_mgr.open_positions:
+                        if final_action >= 3 and not risk_mgr.open_positions:
                             masked = True
-                            rl_action = 0  # Mask TRIM/EXIT when flat
+                            final_action = 0  # Mask TRIM/EXIT when flat
+                            final_confidence = 0.5  # Lower confidence when masked
                         
                         # Gap-based override for this symbol (first 60 minutes only)
-                        action = rl_action
-                        action_source = "RL"
+                        action = final_action  # Use combined signal (or RL if ensemble unavailable)
                         
                         if gap_action is not None and 930 <= current_time_int <= 1035 and not risk_mgr.open_positions:
                             action = gap_action
                             action_source = "GAP"
                             action_strength = 0.9  # High strength for gap signals
+                        else:
+                            # Use the action_source and action_strength from combined signal
+                            action_strength = final_confidence
                         
                         action = int(action)
                         symbol_actions[sym] = (action, action_source, action_strength)

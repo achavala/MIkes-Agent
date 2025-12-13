@@ -1,0 +1,26 @@
+{
+  "versions": [
+    {
+      "version_id": "v20251213_112220_neutral",
+      "model_path": "models/v20251213_112220_neutral.zip",
+      "training_date": "2025-12-13T11:22:20.196287",
+      "regime": "neutral",
+      "performance_metrics": {
+        "training_samples": 100,
+        "regime": "neutral",
+        "training_date": "2025-12-13T11:22:20.196238",
+        "sharpe_ratio": 1.4800856319985758,
+        "win_rate": 0.8599633521093861,
+        "avg_return": 0.11977349462355065
+      },
+      "training_config": {
+        "epochs": 100
+      },
+      "is_active": true,
+      "is_production": false
+    }
+  ],
+  "last_retrain_time": "2025-12-13T11:22:20.196296",
+  "current_production": null,
+  "current_test": "v20251213_112220_neutral"
+}

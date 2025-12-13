@@ -139,7 +139,7 @@ class MikeAgent:
             self._print_summary()
     
     def backtest(self, csv_file: Optional[str] = None, start_date: Optional[str] = None, 
-                 end_date: Optional[str] = None):
+                 end_date: Optional[str] = None, use_execution_modeling: bool = True):
         """
         Run backtest on historical data
         
@@ -147,6 +147,7 @@ class MikeAgent:
             csv_file: Path to CSV file with OHLC data (optional, uses Yahoo if not provided)
             start_date: Start date (YYYY-MM-DD) if using Yahoo
             end_date: End date (YYYY-MM-DD) if using Yahoo
+            use_execution_modeling: Whether to apply slippage and IV crush
         """
         print(f"\n{'='*60}")
         print("BACKTEST MODE - MikeAgent")
@@ -159,7 +160,26 @@ class MikeAgent:
         else:
             print(f"Data source: Yahoo Finance ({start_date} to {end_date})")
         
+        if use_execution_modeling:
+            print("Execution Modeling: ENABLED (slippage + IV crush)")
+        else:
+            print("Execution Modeling: DISABLED")
+        
         print(f"{'='*60}\n")
+        
+        # Integrate execution modeling if enabled
+        if use_execution_modeling:
+            try:
+                from execution_integration import integrate_execution_into_backtest
+                self = integrate_execution_into_backtest(
+                    self,
+                    apply_slippage=True,
+                    apply_iv_crush=True
+                )
+                print("✓ Execution modeling integrated into backtest")
+            except ImportError as e:
+                print(f"⚠️ Warning: Could not integrate execution modeling: {e}")
+                print("  Continuing without execution costs...")
         
         total_pnl = 0.0
         self.current_capital = self.capital
