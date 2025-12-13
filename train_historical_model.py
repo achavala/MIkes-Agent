@@ -521,13 +521,24 @@ def train_on_historical_data(
     # Upgrade from MLP → LSTM for temporal intelligence and state memory
     # This enables: pattern recognition, regime transitions, trend detection
     
-    # If sb3-contrib is available and human_momentum is enabled, prefer MaskablePPO (MLP)
-    # so action masking truly eliminates TRIM/EXIT while flat during training.
+    # PHASE 1 FIX: Allow LSTM even with MaskablePPO by using RecurrentPPO (which supports both)
+    # RecurrentPPO from sb3-contrib provides LSTM + action masking support
     USE_LSTM = False
     LSTM_TYPE = None
+    
+    # Try RecurrentPPO first (supports LSTM + action masking)
     if USE_MASKABLE:
-        print("ℹ️  MaskablePPO available - preferring MLP to guarantee true action masking")
-    else:
+        try:
+            from sb3_contrib import RecurrentPPO  # type: ignore
+            USE_LSTM = True
+            LSTM_TYPE = "RecurrentPPO"
+            print("✅ RecurrentPPO available - Using LSTM Policy with action masking (temporal intelligence enabled)")
+        except ImportError:
+            print("ℹ️  MaskablePPO available but RecurrentPPO not found - using MLP with action masking")
+            print("   💡 To enable LSTM: pip install --upgrade sb3-contrib")
+    
+    # If RecurrentPPO not available, try other LSTM options (only if not using MaskablePPO)
+    if not USE_LSTM and not USE_MASKABLE:
         # Try multiple LSTM options (in priority order)
         # Option 1: RecurrentPPO (sb3-contrib)
         try:

@@ -1,91 +1,92 @@
 #!/bin/bash
-#
-# Quick Training Status Check
-# Shows if training is running, progress, and health
-#
+# Quick Training Status Checker
+# Shows process status, latest logs, and key metrics
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
-
-PID_FILE=".training.pid"
-LOG_FILE=$(ls -t training_*.log 2>/dev/null | head -1)
-CAFFEINATE_PID_FILE=".caffeinate.pid"
-
-echo "═══════════════════════════════════════════════════════════"
-echo "📊 TRAINING STATUS CHECK"
-echo "═══════════════════════════════════════════════════════════"
+echo "🔍 LSTM Training Status Check"
+echo "=============================="
 echo ""
 
-# Check training process
-if [ -f "$PID_FILE" ]; then
-    TRAINING_PID=$(cat "$PID_FILE" 2>/dev/null || echo "")
-    if [ -n "$TRAINING_PID" ] && ps -p "$TRAINING_PID" > /dev/null 2>&1; then
-        echo "✅ Training: RUNNING (PID: $TRAINING_PID)"
-        
-        # Check CPU usage
-        CPU=$(ps -p "$TRAINING_PID" -o %cpu= | tr -d ' ')
-        MEM=$(ps -p "$TRAINING_PID" -o %mem= | tr -d ' ')
-        echo "   CPU: ${CPU}% | Memory: ${MEM}%"
-    else
-        echo "❌ Training: NOT RUNNING (stale PID file)"
-    fi
+# Check if process is running
+PROCESS=$(ps aux | grep -E "train_historical_model|retrain_lstm" | grep -v grep)
+if [ -z "$PROCESS" ]; then
+    echo "❌ Training process NOT running"
+    echo ""
+    echo "Possible reasons:"
+    echo "  - Training completed"
+    echo "  - Training crashed"
+    echo "  - Training hasn't started yet"
+    echo ""
+    echo "Check logs:"
+    echo "  tail -100 training_output.log"
 else
-    echo "❌ Training: NOT RUNNING (no PID file)"
+    PID=$(echo "$PROCESS" | awk '{print $2}')
+    CPU=$(echo "$PROCESS" | awk '{print $3}')
+    MEM=$(echo "$PROCESS" | awk '{print $4}')
+    echo "✅ Training process IS running"
+    echo "   PID: $PID"
+    echo "   CPU: ${CPU}%"
+    echo "   Memory: ${MEM}%"
+    echo ""
 fi
-
-echo ""
-
-# Check caffeinate
-if [ -f "$CAFFEINATE_PID_FILE" ]; then
-    CAFFEINATE_PID=$(cat "$CAFFEINATE_PID_FILE" 2>/dev/null || echo "")
-    if [ -n "$CAFFEINATE_PID" ] && ps -p "$CAFFEINATE_PID" > /dev/null 2>&1; then
-        echo "✅ Sleep Prevention: ACTIVE (PID: $CAFFEINATE_PID)"
-    else
-        echo "❌ Sleep Prevention: NOT ACTIVE"
-    fi
-else
-    echo "❌ Sleep Prevention: NOT ACTIVE (no PID file)"
-fi
-
-echo ""
-
-# Check power status
-if pmset -g batt | grep -q "AC Power"; then
-    echo "✅ Power: PLUGGED IN (lid-closed safe)"
-else
-    echo "⚠️  Power: ON BATTERY (lid-closed may stop training)"
-fi
-
-echo ""
-
-# Check latest checkpoint
-LATEST_CHECKPOINT=$(ls -t models/mike_rl_model_*.zip 2>/dev/null | head -1)
-if [ -n "$LATEST_CHECKPOINT" ]; then
-    CHECKPOINT_SIZE=$(ls -lh "$LATEST_CHECKPOINT" | awk '{print $5}')
-    CHECKPOINT_TIME=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M:%S" "$LATEST_CHECKPOINT" 2>/dev/null || stat -c "%y" "$LATEST_CHECKPOINT" 2>/dev/null | cut -d' ' -f1-2)
-    echo "📁 Latest Checkpoint:"
-    echo "   File: $(basename $LATEST_CHECKPOINT)"
-    echo "   Size: $CHECKPOINT_SIZE"
-    echo "   Time: $CHECKPOINT_TIME"
-else
-    echo "📁 Latest Checkpoint: None yet"
-fi
-
-echo ""
 
 # Check log file
-if [ -n "$LOG_FILE" ] && [ -f "$LOG_FILE" ]; then
-    LOG_SIZE=$(ls -lh "$LOG_FILE" | awk '{print $5}')
-    LOG_LINES=$(wc -l < "$LOG_FILE" 2>/dev/null || echo "0")
-    echo "📝 Log File: $LOG_FILE"
-    echo "   Size: $LOG_SIZE | Lines: $LOG_LINES"
+if [ -f "training_output.log" ]; then
+    LOG_SIZE=$(wc -l < training_output.log)
+    echo "📊 Log file: training_output.log ($LOG_SIZE lines)"
     echo ""
-    echo "   Last 5 lines:"
-    tail -5 "$LOG_FILE" | sed 's/^/   /'
+    
+    # Show last 10 lines
+    echo "📝 Latest output (last 10 lines):"
+    echo "-----------------------------------"
+    tail -10 training_output.log
+    echo ""
+    
+    # Check for key indicators
+    echo "🔍 Key Status Indicators:"
+    echo "-----------------------------------"
+    
+    if grep -q "RecurrentPPO available" training_output.log; then
+        echo "✅ LSTM is active (RecurrentPPO detected)"
+    else
+        echo "⚠️  LSTM status unknown (check logs)"
+    fi
+    
+    if grep -q "Training for" training_output.log; then
+        echo "✅ Training has started"
+    fi
+    
+    if grep -q "MomentumDiagnostics" training_output.log; then
+        LAST_DIAG=$(grep "MomentumDiagnostics" training_output.log | tail -1)
+        echo "✅ Diagnostics available: $LAST_DIAG"
+    fi
+    
+    if grep -q "Saving model" training_output.log; then
+        LAST_SAVE=$(grep "Saving model" training_output.log | tail -1)
+        echo "✅ Checkpoint saved: $LAST_SAVE"
+    fi
+    
+    if grep -q "Error\|Exception\|Traceback" training_output.log; then
+        echo "❌ Errors detected in logs!"
+        echo "   Check: grep -i error training_output.log"
+    fi
+    
+    # Check training log file
+    TRAINING_LOG=$(ls -t logs/training/mike_momentum_model_v3_lstm_*.log 2>/dev/null | head -1)
+    if [ -n "$TRAINING_LOG" ]; then
+        echo ""
+        echo "📁 Training log file: $TRAINING_LOG"
+        TRAINING_LOG_SIZE=$(wc -l < "$TRAINING_LOG" 2>/dev/null || echo "0")
+        echo "   Lines: $TRAINING_LOG_SIZE"
+    fi
+    
 else
-    echo "📝 Log File: Not found"
+    echo "⚠️  Log file not found: training_output.log"
+    echo "   Training may not have started yet"
 fi
 
 echo ""
-echo "═══════════════════════════════════════════════════════════"
-
+echo "💡 Quick Commands:"
+echo "   Watch live: tail -f training_output.log"
+echo "   Check diagnostics: grep 'MomentumDiagnostics' training_output.log | tail -5"
+echo "   Check errors: grep -i error training_output.log | tail -10"
+echo "   Stop training: pkill -f train_historical_model"

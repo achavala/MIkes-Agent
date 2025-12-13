@@ -494,3 +494,4 @@ def get_backtester() -> Optional[AdvancedBacktester]:
     """Get global backtester instance"""
     return _advanced_backtester
 
+

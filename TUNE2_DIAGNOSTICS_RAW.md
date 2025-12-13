@@ -70,3 +70,4 @@ Triggers: good_buy_bonus=8203 | missed_opportunity=3810 | bad_chase_penalty=330
 ---
 
 **END OF RAW DIAGNOSTICS**
+

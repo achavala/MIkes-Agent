@@ -399,3 +399,4 @@ def get_volatility_forecaster() -> Optional[VolatilityForecaster]:
     """Get global volatility forecaster instance"""
     return _volatility_forecaster
 
+

@@ -354,3 +354,4 @@ def get_portfolio_greeks_manager() -> Optional[PortfolioGreeksManager]:
     """Get global portfolio Greeks manager instance"""
     return _portfolio_greeks_manager
 
+

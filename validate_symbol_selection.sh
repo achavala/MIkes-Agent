@@ -81,3 +81,4 @@ echo "Run this script periodically during trading hours:"
 echo "  bash validate_symbol_selection.sh"
 echo ""
 echo "================================================================================"
+

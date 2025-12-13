@@ -80,3 +80,4 @@ for symbol in ['SPY', 'QQQ', 'SPX']:
 print("\n" + "=" * 80)
 print("DIAGNOSTIC COMPLETE")
 print("=" * 80)
+

@@ -39,3 +39,4 @@ echo ""
 echo "To uninstall:"
 echo "  launchctl unload $LAUNCHD_FILE"
 echo "  rm $LAUNCHD_FILE"
+

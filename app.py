@@ -320,6 +320,7 @@ def get_portfolio_bar_data():
                         all_trades = trade_db.get_all_trades()
                         
                         today_trades = []
+                        today_pnl = 0.0  # Initialize today_pnl
                         for trade in all_trades:
                             try:
                                 trade_timestamp = trade.get('timestamp', '')

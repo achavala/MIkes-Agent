@@ -222,9 +222,9 @@ USE_PAPER = os.getenv('ALPACA_PAPER', 'true').lower() == 'true'
 BASE_URL = PAPER_URL if USE_PAPER else LIVE_URL
 
 # ==================== MODEL CONFIG ====================
-# Use the newly trained intraday momentum model (500k timesteps, 1-minute bars)
-# Trained on SPY, QQQ, SPX with human-momentum features and MaskablePPO
-MODEL_PATH = "models/mike_momentum_model_v2_intraday_full.zip"
+# Use the newly trained LSTM model (500k timesteps, 1-minute bars, RecurrentPPO)
+# Trained on SPY, QQQ, SPX with human-momentum features and LSTM temporal intelligence
+MODEL_PATH = "models/mike_momentum_model_v3_lstm.zip"
 LOOKBACK = 20
 
 # ==================== ACTION MAPPING (CANONICAL) ====================
@@ -955,7 +955,7 @@ def get_current_price(symbol: str) -> Optional[float]:
 
 # ==================== MODEL LOADING ====================
 def load_rl_model():
-    """Load trained RL model (supports MaskablePPO for action masking)"""
+    """Load trained RL model (supports MaskablePPO, RecurrentPPO/LSTM, and standard PPO)"""
     if not os.path.exists(MODEL_PATH):
         raise FileNotFoundError(
             f"Model not found at {MODEL_PATH}. "
@@ -964,7 +964,21 @@ def load_rl_model():
     
     print(f"Loading RL model from {MODEL_PATH}...")
     
-    # Try MaskablePPO first (for action masking support)
+    # Try RecurrentPPO first (LSTM models)
+    try:
+        from sb3_contrib import RecurrentPPO
+        try:
+            model = RecurrentPPO.load(MODEL_PATH)
+            print("✓ Model loaded successfully (RecurrentPPO with LSTM temporal intelligence)")
+            return model
+        except Exception as e:
+            # Not a RecurrentPPO model, continue to other options
+            pass
+    except ImportError:
+        # RecurrentPPO not available
+        pass
+    
+    # Try MaskablePPO (for action masking support)
     if MASKABLE_PPO_AVAILABLE:
         try:
             model = MaskablePPO.load(MODEL_PATH)

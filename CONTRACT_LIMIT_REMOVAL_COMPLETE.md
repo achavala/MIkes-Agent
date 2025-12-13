@@ -177,3 +177,4 @@ The system is now ready to use **regime-adjusted position sizing** without the a
 ---
 
 **Last Updated**: 2025-12-12
+

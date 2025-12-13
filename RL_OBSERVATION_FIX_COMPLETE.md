@@ -324,3 +324,4 @@ Expected: QQQ and SPX trades (not just SPY)
 *Status: FIXED* ✅  
 *Validation: Market open 9:30 AM* ⏰  
 *Debug Logging: ENABLED* 🔍
+

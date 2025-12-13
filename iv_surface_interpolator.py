@@ -392,3 +392,4 @@ def initialize_iv_surface_interpolator(api_key: Optional[str] = None):
 def get_iv_surface_interpolator() -> Optional[IVSurfaceInterpolator]:
     """Get global IV surface interpolator instance"""
     return _iv_surface_interpolator
+

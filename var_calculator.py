@@ -439,3 +439,4 @@ def get_var_calculator() -> Optional[VaRCalculator]:
     """Get global VaR calculator instance"""
     return _var_calculator
 
+

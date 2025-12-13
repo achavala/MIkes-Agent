@@ -217,3 +217,4 @@ grep "TRADE EXECUTED" logs/agent_*.log | tail -20
 **Effort**: 5-minute code change (2 lines)
 
 **Should I implement the fix now?** 🔧
+
