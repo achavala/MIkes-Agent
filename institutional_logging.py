@@ -96,7 +96,8 @@ class InstitutionalLogger:
         ensemble_action: str,
         ensemble_confidence: float,
         agent_votes: Dict[str, str],
-        action_scores: Optional[Dict] = None
+        action_scores: Optional[Dict] = None,
+        metadata: Optional[Dict] = None
     ):
         """
         Log decision (every bar, even if HOLD)
@@ -129,7 +130,8 @@ class InstitutionalLogger:
             "ensemble_action": ensemble_action,
             "ensemble_confidence": ensemble_confidence,
             "agent_votes": agent_votes,
-            "action_scores": action_scores or {}
+            "action_scores": action_scores or {},
+            "metadata": metadata or {}
         }
         
         self._append_log("decisions", log_entry)
@@ -244,9 +246,23 @@ class InstitutionalLogger:
         qty: int,
         entry_price: float,
         strike: float,
-        premium: float
+        premium: float,
+        is_probe_trade: bool = False
     ):
-        """Log position entry"""
+        """
+        Log position entry
+        
+        Args:
+            trade_id: Unique trade identifier
+            timestamp: Entry timestamp
+            symbol: Trading symbol
+            action: Action type (BUY_CALL/BUY_PUT)
+            qty: Quantity
+            entry_price: Entry price
+            strike: Strike price
+            premium: Option premium
+            is_probe_trade: Whether this is a probe trade (behavioral testing)
+        """
         if trade_id not in self.position_buffer:
             self.position_buffer[trade_id] = {
                 "trade_id": trade_id,
@@ -257,6 +273,7 @@ class InstitutionalLogger:
                 "entry_price": entry_price,
                 "strike": strike,
                 "entry_premium": premium,
+                "is_probe_trade": is_probe_trade,
                 "exit_time": None,
                 "exit_reason": None,
                 "exit_price": None,

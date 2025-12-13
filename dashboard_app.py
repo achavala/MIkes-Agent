@@ -466,9 +466,9 @@ def render_analytics():
     stats_df = get_detailed_stats(period)
     st.dataframe(stats_df, use_container_width=True, hide_index=True)
     
-    # Add Logs and Feedback tabs
+    # Add Logs, Feedback, and Data Integrity tabs
     st.markdown("---")
-    tab1, tab2 = st.tabs(["📋 Logs", "💬 Feedback"])
+    tab1, tab2, tab3 = st.tabs(["📋 Logs", "💬 Feedback", "🔒 Data Integrity"])
     
     with tab1:
         render_logs_section()
@@ -476,15 +476,23 @@ def render_analytics():
     with tab2:
         render_feedback_section()
     
-    # Add Logs and Feedback tabs
+    with tab3:
+        from data_integrity_analytics import render_data_integrity_panel
+        render_data_integrity_panel()
+    
+    # Add Logs, Feedback, and Data Integrity tabs
     st.markdown("---")
-    tab1, tab2 = st.tabs(["📋 Logs", "💬 Feedback"])
+    tab1, tab2, tab3 = st.tabs(["📋 Logs", "💬 Feedback", "🔒 Data Integrity"])
     
     with tab1:
         render_logs_section()
     
     with tab2:
         render_feedback_section()
+    
+    with tab3:
+        from data_integrity_analytics import render_data_integrity_panel
+        render_data_integrity_panel()
 
 # ==================== TRADES PAGE ====================
 def render_trades():

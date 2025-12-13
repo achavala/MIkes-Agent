@@ -55,20 +55,33 @@ class WeeklyReviewSystem:
         learning = logger.get_logs("learning", start_date=start_date, end_date=end_date)
         
         # Answer the 6 key questions
+        answers = self._answer_key_questions(
+            decisions, risk_checks, executions, positions, learning
+        )
+        
         review = {
             "day": day,
             "review_date": review_date,
             "period_start": start_date,
             "period_end": end_date,
-            "answers": self._answer_key_questions(
-                decisions, risk_checks, executions, positions, learning
-            ),
+            "answers": answers,
             "timestamp": datetime.now().isoformat()
         }
         
         # Save review
         self.reviews[f"day_{day}"] = review
         self._save_reviews()
+        
+        # Print summary for immediate visibility
+        print(f"\n   📊 Review Summary:")
+        if answers:
+            print(f"      - Trades: {answers.get('trades_today', 0)}")
+            print(f"      - Avg slippage: {answers.get('avg_slippage_pct', 0):.2f}%")
+            print(f"      - Ensemble override: {answers.get('ensemble_override_rate_pct', 0):.1f}%")
+            print(f"      - Gamma blocks: {answers.get('gamma_blocks', 0)}")
+            print(f"      - HOLD rate: {answers.get('hold_rate_pct', 0):.1f}%")
+        else:
+            print(f"      - No metrics computed (insufficient data)")
         
         return review
     
@@ -80,7 +93,7 @@ class WeeklyReviewSystem:
         positions: List[Dict],
         learning: List[Dict]
     ) -> Dict:
-        """Answer the 6 key questions"""
+        """Answer the 6 key questions with actual computed metrics"""
         import pandas as pd
         import numpy as np
         
@@ -108,16 +121,21 @@ class WeeklyReviewSystem:
             if 'rl_action' in df.columns and 'ensemble_action' in df.columns:
                 overrides = df[df['rl_action'] != df['ensemble_action']]
                 override_rate = len(overrides) / len(df) * 100 if len(df) > 0 else 0
-                answers['ensemble_override_rate_pct'] = override_rate
+                answers['ensemble_override_rate_pct'] = round(override_rate, 2)
                 answers['override_rate_stable'] = True  # Would calculate variance over time
         
         # Question 3: Is gamma agent blocking late-day stupidity?
         if risk_checks:
             df = pd.DataFrame(risk_checks)
             blocked = df[df.get('risk_action') == 'BLOCK']
-            gamma_blocks = blocked[blocked.get('risk_reason', '').str.contains('GAMMA', na=False)]
-            answers['gamma_blocks'] = len(gamma_blocks)
-            answers['gamma_blocks_effective'] = len(gamma_blocks) > 0
+            if len(blocked) > 0 and 'risk_reason' in blocked.columns:
+                # Handle string contains for risk_reason
+                gamma_blocks = blocked[blocked['risk_reason'].astype(str).str.contains('GAMMA', na=False)]
+                answers['gamma_blocks'] = len(gamma_blocks)
+                answers['gamma_blocks_effective'] = len(gamma_blocks) > 0
+            else:
+                answers['gamma_blocks'] = 0
+                answers['gamma_blocks_effective'] = False
         
         # Question 4: Is slippage within 0.3-0.8%?
         if executions:
@@ -126,25 +144,35 @@ class WeeklyReviewSystem:
                 avg_slippage = df['slippage_pct'].mean()
                 min_slippage = df['slippage_pct'].min()
                 max_slippage = df['slippage_pct'].max()
-                answers['avg_slippage_pct'] = avg_slippage
-                answers['slippage_range'] = (min_slippage, max_slippage)
+                answers['avg_slippage_pct'] = round(avg_slippage, 2)
+                answers['slippage_range'] = (round(min_slippage, 2), round(max_slippage, 2))
                 answers['slippage_within_bounds'] = 0.3 <= avg_slippage <= 0.8
+            else:
+                answers['avg_slippage_pct'] = 0.0
+                answers['slippage_within_bounds'] = False
         
         # Question 5: Is retraining helping or hurting?
         if learning:
             df = pd.DataFrame(learning)
             retrained = df[df.get('retrained') == True]
             if len(retrained) > 0:
-                promotions = retrained[retrained.get('promotion') == True]
                 if 'sharpe_candidate' in df.columns and 'sharpe_prod' in df.columns:
                     improvements = []
                     for _, row in retrained.iterrows():
-                        if row.get('sharpe_candidate') and row.get('sharpe_prod'):
-                            improvement = row['sharpe_candidate'] - row['sharpe_prod']
+                        candidate = row.get('sharpe_candidate')
+                        prod = row.get('sharpe_prod')
+                        if pd.notna(candidate) and pd.notna(prod):
+                            improvement = candidate - prod
                             improvements.append(improvement)
                     avg_improvement = np.mean(improvements) if improvements else 0
-                    answers['retraining_avg_improvement'] = avg_improvement
+                    answers['retraining_avg_improvement'] = round(avg_improvement, 3)
                     answers['retraining_helping'] = avg_improvement > 0
+                else:
+                    answers['retraining_avg_improvement'] = 0.0
+                    answers['retraining_helping'] = False
+            else:
+                answers['retraining_avg_improvement'] = 0.0
+                answers['retraining_helping'] = False
         
         # Question 6: Is HOLD behavior sensible?
         if decisions:
@@ -153,9 +181,21 @@ class WeeklyReviewSystem:
                 hold_count = len(df[df['action_final'] == 'HOLD'])
                 total = len(df)
                 hold_rate = (hold_count / total * 100) if total > 0 else 0
-                answers['hold_rate_pct'] = hold_rate
+                answers['hold_rate_pct'] = round(hold_rate, 2)
                 # Sensible = 40-70% HOLD rate (not too aggressive, not too passive)
                 answers['hold_behavior_sensible'] = 40 <= hold_rate <= 70
+            else:
+                answers['hold_rate_pct'] = 0.0
+                answers['hold_behavior_sensible'] = False
+        
+        # Additional useful metrics
+        if decisions:
+            df = pd.DataFrame(decisions)
+            if 'action_final' in df.columns:
+                buy_count = len(df[df['action_final'].astype(str).str.contains('BUY', na=False)])
+                answers['trades_today'] = buy_count
+            else:
+                answers['trades_today'] = 0
         
         return answers
     

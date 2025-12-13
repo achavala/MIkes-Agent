@@ -68,6 +68,8 @@ class RealisticFillModel:
         # 1. Base randomness (market-maker behavior)
         # Market makers quote wider spreads when uncertain
         mm_uncertainty = self._market_maker_uncertainty(vix, time_to_expiry, has_news)
+        # Ensure mm_uncertainty is non-negative (scale must be >= 0 for np.random.normal)
+        mm_uncertainty = max(0.0, abs(mm_uncertainty))  # Use absolute value, ensure non-negative
         randomness = np.random.normal(0, mm_uncertainty)  # Random walk
         
         # 2. Liquidity factor
@@ -164,7 +166,9 @@ class RealisticFillModel:
         
         uncertainty = base_uncertainty * vix_factor * time_factor * news_factor
         
-        return min(uncertainty, 1.0)  # Cap at 100%
+        # Ensure non-negative and cap at 100%
+        # Note: time_factor can be negative if time_to_expiry > 6.5, so we need to ensure non-negative
+        return max(0.0, min(uncertainty, 1.0))  # Ensure non-negative, cap at 100%
     
     def _calculate_liquidity_factor(
         self,
