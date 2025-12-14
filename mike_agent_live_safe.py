@@ -62,7 +62,15 @@ except ImportError:
     MASKABLE_PPO_AVAILABLE = False
     print("Warning: sb3-contrib not available. Action masking will be disabled. Install with: pip install sb3-contrib")
 
-import config
+try:
+    import config
+except ImportError:
+    # Create a mock config from environment variables (for Railway/Cloud)
+    class Config:
+        ALPACA_KEY = os.environ.get('ALPACA_KEY', '')
+        ALPACA_SECRET = os.environ.get('ALPACA_SECRET', '')
+        ALPACA_BASE_URL = os.environ.get('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets')
+    config = Config()
 
 # Import trade database for persistent storage
 try:

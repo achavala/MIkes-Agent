@@ -12,7 +12,21 @@ import time
 import sys
 from typing import Optional, Dict, Any, List
 import yfinance as yf
-import config
+try:
+    import config
+except ImportError:
+    # Create a mock config from environment variables
+    class Config:
+        ALPACA_KEY = os.environ.get('ALPACA_KEY', '')
+        ALPACA_SECRET = os.environ.get('ALPACA_SECRET', '')
+        ALPACA_BASE_URL = os.environ.get('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets')
+        SYMBOLS = ['SPY', 'QQQ']
+        START_CAPITAL = 1000.0
+        RISK_PCT = 0.07
+        VIX_THRESHOLD = 28.0
+        IV_THRESHOLD = 30.0
+    config = Config()
+    import os  # Ensure os is imported for the fallback
 
 try:
     from alpaca_trade_api.rest import REST as AlpacaREST

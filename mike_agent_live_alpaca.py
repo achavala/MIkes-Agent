@@ -37,7 +37,17 @@ except ImportError:
     RL_AVAILABLE = False
     print("Error: stable-baselines3 not installed. Install with: pip install stable-baselines3")
 
-import config
+try:
+    import config
+except ImportError:
+    # Create a mock config from environment variables
+    class Config:
+        ALPACA_KEY = os.environ.get('ALPACA_KEY', 'YOUR_ALPACA_PAPER_KEY')
+        ALPACA_SECRET = os.environ.get('ALPACA_SECRET', 'YOUR_ALPACA_PAPER_SECRET')
+        ALPACA_BASE_URL = os.environ.get('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets')
+        RISK_PCT = 0.07
+        START_CAPITAL = 1000.0
+    config = Config()
 
 # ==================== ALPACA CONFIG ====================
 # ⚠️ CHANGE THESE TO YOUR ALPACA KEYS

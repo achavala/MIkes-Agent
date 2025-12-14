@@ -30,7 +30,16 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # Try to import dependencies gracefully
 try:
     import alpaca_trade_api as tradeapi
-    import config
+    try:
+        import config
+    except ImportError:
+        # Create a mock config from environment variables (for Railway)
+        class Config:
+            ALPACA_KEY = os.environ.get('ALPACA_KEY', '')
+            ALPACA_SECRET = os.environ.get('ALPACA_SECRET', '')
+            ALPACA_BASE_URL = os.environ.get('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets')
+        config = Config()
+        
     ALPACA_AVAILABLE = True
 except ImportError:
     ALPACA_AVAILABLE = False
