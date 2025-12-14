@@ -177,31 +177,79 @@ def inject_custom_css():
         margin-top: 0.5rem;
     }
     
-    /* Navigation Links (Text Only) */
+    /* Buttons (Glossy Purple) - Restored for Action Buttons */
     .stButton > button {
-        background: transparent !important;
+        background: linear-gradient(135deg, #a855f7 0%, #7c3aed 100%) !important;
         border: none !important;
-        box-shadow: none !important;
-        color: #64748b !important;  /* Slate 500 */
-        font-weight: 600;
-        font-size: 1rem;
-        padding: 0.5rem 1rem;
-        transition: all 0.2s ease;
-        text-align: left;
-        display: block;
-        width: 100%;
+        border-radius: 8px !important;
+        color: white !important;
+        padding: 0.6rem 1.5rem !important;
+        font-weight: 600 !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 4px 6px -1px rgba(168, 85, 247, 0.3) !important;
+        text-align: center !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        width: auto !important;
     }
     
     .stButton > button:hover {
-        color: #7c3aed !important;  /* Purple 600 */
-        background: rgba(168, 85, 247, 0.05) !important;
-        transform: translateX(4px);
+        background: linear-gradient(135deg, #9333ea 0%, #6d28d9 100%) !important;
+        box-shadow: 0 8px 12px -3px rgba(168, 85, 247, 0.4) !important;
+        transform: translateY(-1px) !important;
     }
     
-    .stButton > button:active, .stButton > button:focus {
-        color: #7c3aed !important;
+    .stButton > button:active {
+        transform: translateY(0px) !important;
+    }
+
+    /* Navigation - Styled Radio as Text Links */
+    div[data-testid="stRadio"] > label {
+        display: none;
+    }
+    
+    div[data-testid="stRadio"] > div[role="radiogroup"] {
+        gap: 2rem;
+        display: flex;
+        justify-content: center;
+        background: white;
+        padding: 1rem 2rem;
+        border-radius: 100px; /* Pill shape container */
+        border: 1px solid #e2e8f0;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+        width: fit-content;
+        margin: 0 auto 2rem auto;
+    }
+    
+    div[data-testid="stRadio"] > div[role="radiogroup"] > label {
         background: transparent !important;
-        outline: none !important;
+        border: none !important;
+        padding: 0.5rem 1rem !important;
+        margin: 0 !important;
+        color: #64748b !important;
+        font-weight: 600 !important;
+        font-size: 1rem !important;
+        transition: all 0.2s ease !important;
+        cursor: pointer !important;
+    }
+    
+    /* Hide the radio circle */
+    div[data-testid="stRadio"] > div[role="radiogroup"] > label > div:first-child {
+        display: none !important;
+    }
+    
+    /* Hover state for nav items */
+    div[data-testid="stRadio"] > div[role="radiogroup"] > label:hover {
+        color: #a855f7 !important;
+        transform: translateY(-1px);
+    }
+    
+    /* Active state for nav items (checked) */
+    div[data-testid="stRadio"] > div[role="radiogroup"] > label[data-checked="true"] {
+        color: #a855f7 !important;
+        border-bottom: 2px solid #a855f7 !important;
+        border-radius: 0 !important;
     }
     
     /* Navigation Highlight for Active Page */
@@ -326,26 +374,20 @@ def render_navigation():
     if 'current_page' not in st.session_state:
         st.session_state.current_page = "Dashboard"
     
-    # Create navigation tabs
-    cols = st.columns(len(pages))
-    for i, page in enumerate(pages):
-        with cols[i]:
-            if st.button(page, key=f"nav_{page}", use_container_width=True):
-                st.session_state.current_page = page
-                st.rerun()
+    # Render navigation as a styled radio button (looks like text links)
+    selected = st.radio(
+        "Navigation",
+        pages,
+        index=pages.index(st.session_state.current_page) if st.session_state.current_page in pages else 0,
+        horizontal=True,
+        label_visibility="collapsed",
+        key="main_nav"
+    )
     
-    # Highlight current page with Glossy Purple style
-    st.markdown(f"""
-    <style>
-    div.stButton > button[key="nav_{st.session_state.current_page}"] {{
-        background: linear-gradient(135deg, #9333ea 0%, #7c3aed 100%) !important;
-        box-shadow: 0 4px 15px -3px rgba(147, 51, 234, 0.5) !important;
-        border: 1px solid rgba(255,255,255,0.2) !important;
-        color: white !important;
-        transform: translateY(-1px);
-    }}
-    </style>
-    """, unsafe_allow_html=True)
+    # Update state if changed
+    if selected != st.session_state.current_page:
+        st.session_state.current_page = selected
+        st.rerun()
     
     return st.session_state.current_page
 
