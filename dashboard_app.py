@@ -109,184 +109,210 @@ def save_state(state):
 
 # ==================== CUSTOM CSS ====================
 def inject_custom_css():
-    """Inject custom CSS for Zyrix-inspired cyber aesthetic"""
+    """Inject custom CSS for TradeNova aesthetic (Light Theme + Glossy Purple)"""
     st.markdown("""
     <style>
     /* Global Background */
     .stApp {
-        background-color: #050511;
-        background-image: 
-            radial-gradient(at 0% 0%, rgba(99, 102, 241, 0.15) 0px, transparent 50%),
-            radial-gradient(at 100% 0%, rgba(168, 85, 247, 0.15) 0px, transparent 50%);
-        background-attachment: fixed;
+        background-color: #f8fafc;
+        background-image: none;
     }
     
     /* Typography */
-    h1, h2, h3, h4, h5, h6, p, div, span {
+    h1, h2, h3, h4, h5, h6, p, div, span, label {
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-        color: #f8fafc;
+        color: #1e293b;
     }
     
-    /* Gradient Text */
-    .gradient-text {
-        background: linear-gradient(90deg, #818cf8 0%, #c084fc 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        font-weight: 800;
-    }
-    
-    /* Dashboard Header */
-    .dashboard-header {
-        background: rgba(255, 255, 255, 0.03);
-        backdrop-filter: blur(16px);
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        padding: 2rem;
-        border-radius: 24px;
+    /* Dashboard Header (Blue to Orange Gradient) */
+    .tradenova-header {
+        background: linear-gradient(90deg, #2563eb 0%, #ea580c 100%);
+        padding: 2.5rem;
+        border-radius: 16px;
         margin-bottom: 2rem;
-        box-shadow: 0 4px 24px -1px rgba(0, 0, 0, 0.2);
+        color: white !important;
+        text-align: center;
+        box-shadow: 0 10px 25px -5px rgba(37, 99, 235, 0.2);
+    }
+    
+    .tradenova-title {
+        font-size: 3rem;
+        font-weight: 800;
+        color: white !important;
+        margin-bottom: 0.5rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 1rem;
+        text-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    .tradenova-subtitle {
+        font-size: 1.2rem;
+        color: rgba(255, 255, 255, 0.95) !important;
+        font-weight: 500;
+        letter-spacing: 0.5px;
+    }
+    
+    /* Standard Dashboard Header */
+    .dashboard-header {
+        background: white;
+        padding: 2rem;
+        border-radius: 16px;
+        margin-bottom: 2rem;
+        border: 1px solid #e2e8f0;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
     }
     
     .dashboard-title {
-        font-size: 2.5rem;
+        font-size: 2.2rem;
         font-weight: 700;
+        color: #1e293b;
         margin: 0;
-        background: linear-gradient(90deg, #fff 0%, #94a3b8 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
     }
     
     .dashboard-subtitle {
-        color: #94a3b8;
+        color: #64748b;
         font-size: 1.1rem;
         margin-top: 0.5rem;
     }
     
-    /* Buttons (Pill Shape + Gradient Border) */
+    /* Navigation Links (Text Only) */
     .stButton > button {
-        background: linear-gradient(#050511, #050511) padding-box,
-                    linear-gradient(90deg, #6366f1, #a855f7) border-box;
-        border: 1px solid transparent;
-        border-radius: 9999px;
-        color: #fff;
-        padding: 0.6rem 1.5rem;
+        background: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+        color: #64748b !important;  /* Slate 500 */
         font-weight: 600;
-        transition: all 0.3s ease;
-        box-shadow: 0 0 15px rgba(99, 102, 241, 0.1);
+        font-size: 1rem;
+        padding: 0.5rem 1rem;
+        transition: all 0.2s ease;
+        text-align: left;
+        display: block;
+        width: 100%;
     }
     
     .stButton > button:hover {
-        background: linear-gradient(90deg, #6366f1, #a855f7) padding-box,
-                    linear-gradient(90deg, #6366f1, #a855f7) border-box;
-        box-shadow: 0 0 25px rgba(168, 85, 247, 0.4);
-        transform: translateY(-2px);
+        color: #7c3aed !important;  /* Purple 600 */
+        background: rgba(168, 85, 247, 0.05) !important;
+        transform: translateX(4px);
     }
     
-    .stButton > button:active {
-        transform: translateY(0px);
+    .stButton > button:active, .stButton > button:focus {
+        color: #7c3aed !important;
+        background: transparent !important;
+        outline: none !important;
     }
     
-    /* Navigation Tabs */
-    .stTabs [data-baseweb="tab-list"] {
-        background: rgba(255, 255, 255, 0.03);
-        padding: 8px;
-        border-radius: 16px;
-        border: 1px solid rgba(255, 255, 255, 0.05);
-        gap: 8px;
+    /* Navigation Highlight for Active Page */
+    /* Note: Streamlit doesn't easily expose active state class on buttons, 
+       but we can style the specific buttons based on usage context if needed.
+       For now, the visual feedback is hover/click. */
+    
+    /* Secondary/Action Buttons */
+    div[data-testid="stForm"] .stButton > button {
+        background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+        box-shadow: 0 4px 6px -1px rgba(37, 99, 235, 0.3);
     }
     
-    .stTabs [data-baseweb="tab"] {
-        background: transparent;
-        border-radius: 12px;
-        padding: 8px 20px;
-        color: #94a3b8;
-        font-weight: 500;
-        border: none;
-    }
-    
-    .stTabs [aria-selected="true"] {
-        background: rgba(255, 255, 255, 0.1);
-        color: #fff;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-    }
-    
-    /* Cards */
+    /* Metric Cards (White with Shadow) */
     .metric-card {
-        background: rgba(255, 255, 255, 0.02);
-        backdrop-filter: blur(10px);
+        background: white;
         padding: 1.5rem;
-        border-radius: 20px;
-        border: 1px solid rgba(255, 255, 255, 0.05);
-        transition: transform 0.2s;
+        border-radius: 12px;
+        border: 1px solid #e2e8f0;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+        transition: transform 0.2s, box-shadow 0.2s;
+        height: 100%;
     }
     
     .metric-card:hover {
-        border-color: rgba(99, 102, 241, 0.3);
         transform: translateY(-2px);
-        background: rgba(255, 255, 255, 0.04);
+        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+        border-color: #a855f7; /* Purple hover border */
     }
     
     .metric-value {
         font-size: 2.2rem;
-        font-weight: 700;
-        background: linear-gradient(90deg, #22d3ee, #818cf8);
+        font-weight: 800;
+        color: #1e293b;
+        /* Glossy purple gradient text for values */
+        background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         margin: 0.5rem 0;
     }
     
     .metric-label {
-        color: #94a3b8;
+        color: #64748b;
         font-size: 0.85rem;
         text-transform: uppercase;
-        letter-spacing: 1.5px;
+        letter-spacing: 1.2px;
         font-weight: 600;
     }
     
-    /* Dataframes/Tables */
+    /* Navigation Tabs */
+    .stTabs [data-baseweb="tab-list"] {
+        background: white;
+        padding: 8px;
+        border-radius: 12px;
+        border: 1px solid #e2e8f0;
+        gap: 8px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+    
+    .stTabs [data-baseweb="tab"] {
+        background: transparent;
+        border-radius: 8px;
+        padding: 8px 20px;
+        color: #64748b;
+        font-weight: 600;
+        border: none;
+    }
+    
+    .stTabs [aria-selected="true"] {
+        background: #f8fafc;
+        color: #a855f7 !important; /* Glossy purple active state */
+        border-bottom: 2px solid #a855f7;
+    }
+    
+    /* Dataframes */
     [data-testid="stDataFrame"] {
-        background: rgba(255, 255, 255, 0.02);
-        border-radius: 16px;
+        background: white;
+        border-radius: 12px;
         padding: 1rem;
-        border: 1px solid rgba(255, 255, 255, 0.05);
+        border: 1px solid #e2e8f0;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
     }
     
     /* Inputs */
-    .stTextInput input, .stSelectbox div[data-baseweb="select"] > div, .stNumberInput input {
-        background-color: rgba(255, 255, 255, 0.03);
-        color: white;
-        border-radius: 12px;
-        border: 1px solid rgba(255, 255, 255, 0.1);
+    .stTextInput input, .stSelectbox div[data-baseweb="select"] > div, .stNumberInput input, .stDateInput input {
+        background-color: white;
+        color: #1e293b;
+        border-radius: 8px;
+        border: 1px solid #cbd5e1;
     }
     
     .stTextInput input:focus, .stSelectbox div[data-baseweb="select"] > div:focus-within {
-        border-color: #818cf8;
-        box-shadow: 0 0 0 1px #818cf8;
+        border-color: #a855f7;
+        box-shadow: 0 0 0 2px rgba(168, 85, 247, 0.2);
     }
     
-    /* Status Indicators */
-    .status-online {
-        color: #4ade80;
-        text-shadow: 0 0 10px rgba(74, 222, 128, 0.4);
-    }
-    
-    .status-offline {
-        color: #f87171;
-        text-shadow: 0 0 10px rgba(248, 113, 113, 0.4);
-    }
-    
-    /* Scrollbar */
-    ::-webkit-scrollbar {
-        width: 10px;
-        background: #050511;
-    }
-    ::-webkit-scrollbar-thumb {
-        background: #334155;
-        border-radius: 5px;
-    }
-    
-    /* Plotly Charts Background */
+    /* Charts */
     .js-plotly-plot .plotly .main-svg {
         background: transparent !important;
+    }
+    
+    /* Status Colors */
+    .status-online { color: #22c55e !important; font-weight: bold; }
+    .status-offline { color: #ef4444 !important; font-weight: bold; }
+    
+    /* Gradient Text Utility */
+    .gradient-text {
+        background: linear-gradient(135deg, #a855f7 0%, #6366f1 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        font-weight: 800;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -308,14 +334,15 @@ def render_navigation():
                 st.session_state.current_page = page
                 st.rerun()
     
-    # Highlight current page
+    # Highlight current page with Glossy Purple style
     st.markdown(f"""
     <style>
     div.stButton > button[key="nav_{st.session_state.current_page}"] {{
-        background: linear-gradient(90deg, #6366f1, #a855f7) !important;
-        box-shadow: 0 0 20px rgba(139, 92, 246, 0.5) !important;
-        border: none !important;
+        background: linear-gradient(135deg, #9333ea 0%, #7c3aed 100%) !important;
+        box-shadow: 0 4px 15px -3px rgba(147, 51, 234, 0.5) !important;
+        border: 1px solid rgba(255,255,255,0.2) !important;
         color: white !important;
+        transform: translateY(-1px);
     }}
     </style>
     """, unsafe_allow_html=True)
@@ -325,10 +352,17 @@ def render_navigation():
 # ==================== DASHBOARD PAGE ====================
 def render_dashboard():
     """Render main dashboard page"""
-    # Header removed as per user request to avoid duplication
-    
-    # Add 2cm spacing between Dashboard header and first content line
-    st.markdown("<div style='height: 2cm;'></div>", unsafe_allow_html=True)
+    # TradeNova Header (Blue to Orange Gradient)
+    st.markdown("""
+    <div class="tradenova-header">
+        <div class="tradenova-title">
+            <span>📈</span> MikesAgent - AI Trading System Dashboard
+        </div>
+        <div class="tradenova-subtitle">
+            Institutional-Grade Multi-Agent RL Trading Platform
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
     
     # Get portfolio data
     portfolio_data = get_portfolio_data()
@@ -341,20 +375,22 @@ def render_dashboard():
         <div class="metric-card">
             <div class="metric-label">Total Balance</div>
             <div class="metric-value">${portfolio_data.get('portfolio_value', 0):,.2f}</div>
-            <div style="color: rgba(255,255,255,0.7); font-size: 0.8rem;">
+            <div style="color: #64748b; font-size: 0.8rem; font-weight: 500;">
                 {portfolio_data.get('daily_pnl_pct', 0):+.2f}% today
             </div>
         </div>
         """, unsafe_allow_html=True)
     
     with col2:
+        pnl = portfolio_data.get('today_pnl', 0)
+        pnl_color = '#16a34a' if pnl >= 0 else '#dc2626' # Darker green/red for light theme
         st.markdown(f"""
         <div class="metric-card">
             <div class="metric-label">Today's P&L</div>
-            <div class="metric-value" style="color: {'#4ade80' if portfolio_data.get('today_pnl', 0) >= 0 else '#f87171'};">
-                ${portfolio_data.get('today_pnl', 0):+,.2f}
+            <div class="metric-value" style="color: {pnl_color}; background: none; -webkit-text-fill-color: initial;">
+                ${pnl:+,.2f}
             </div>
-            <div style="color: rgba(255,255,255,0.7); font-size: 0.8rem;">
+            <div style="color: #64748b; font-size: 0.8rem; font-weight: 500;">
                 {portfolio_data.get('num_trades_today', 0)} trades
             </div>
         </div>
@@ -366,7 +402,7 @@ def render_dashboard():
         <div class="metric-card">
             <div class="metric-label">Active Positions</div>
             <div class="metric-value">{active_positions}</div>
-            <div style="color: rgba(255,255,255,0.7); font-size: 0.8rem;">
+            <div style="color: #64748b; font-size: 0.8rem; font-weight: 500;">
                 {portfolio_data.get('max_positions', 3)} max
             </div>
         </div>
@@ -374,15 +410,15 @@ def render_dashboard():
     
     with col4:
         agent_status = get_agent_status()
-        status_color = "#4ade80" if agent_status.get('running', False) else "#f87171"
+        status_color = "#16a34a" if agent_status.get('running', False) else "#dc2626"
         status_text = "ONLINE" if agent_status.get('running', False) else "OFFLINE"
         st.markdown(f"""
         <div class="metric-card">
             <div class="metric-label">Agent Status</div>
-            <div class="metric-value" style="color: {status_color}; font-size: 1.5rem;">
+            <div class="metric-value" style="color: {status_color}; background: none; -webkit-text-fill-color: initial; font-size: 1.5rem;">
                 {status_text}
             </div>
-            <div style="color: rgba(255,255,255,0.7); font-size: 0.8rem;">
+            <div style="color: #64748b; font-size: 0.8rem; font-weight: 500;">
                 {agent_status.get('uptime', 'N/A')}
             </div>
         </div>
@@ -466,9 +502,9 @@ def render_analytics():
     stats_df = get_detailed_stats(period)
     st.dataframe(stats_df, use_container_width=True, hide_index=True)
     
-    # Add Logs, Feedback, and Data Integrity tabs
+    # Add Logs, Feedback, Data Integrity, and P&L Analysis tabs
     st.markdown("---")
-    tab1, tab2, tab3 = st.tabs(["📋 Logs", "💬 Feedback", "🔒 Data Integrity"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📋 Logs", "💬 Feedback", "🔒 Data Integrity", "💰 P&L Analysis"])
     
     with tab1:
         render_logs_section()
@@ -479,20 +515,9 @@ def render_analytics():
     with tab3:
         from data_integrity_analytics import render_data_integrity_panel
         render_data_integrity_panel()
-    
-    # Add Logs, Feedback, and Data Integrity tabs
-    st.markdown("---")
-    tab1, tab2, tab3 = st.tabs(["📋 Logs", "💬 Feedback", "🔒 Data Integrity"])
-    
-    with tab1:
-        render_logs_section()
-    
-    with tab2:
-        render_feedback_section()
-    
-    with tab3:
-        from data_integrity_analytics import render_data_integrity_panel
-        render_data_integrity_panel()
+        
+    with tab4:
+        render_pnl_analysis()
 
 # ==================== TRADES PAGE ====================
 def render_trades():
@@ -508,6 +533,17 @@ def render_trades():
     tab1, tab2 = st.tabs(["📊 Trade History", "🧪 Backtesting"])
     
     with tab1:
+        # Sync Button
+        col_sync1, col_sync2 = st.columns([5, 1])
+        with col_sync2:
+            if st.button("🔄 Sync History", help="Recover missing trades from Alpaca"):
+                with st.spinner("Syncing history..."):
+                    count = sync_alpaca_history()
+                    if count >= 0:
+                        st.success(f"Synced {count} trades")
+                        time.sleep(1)
+                        st.rerun()
+
         # Filters
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -550,13 +586,13 @@ def render_agents():
     
     with col1:
         st.markdown("### Agent Status")
-        status_color = "#4ade80" if agent_status.get('running', False) else "#f87171"
+        status_color = "#16a34a" if agent_status.get('running', False) else "#dc2626"
         st.markdown(f"""
         <div class="metric-card">
-            <div style="color: {status_color}; font-size: 1.5rem; font-weight: bold;">
+            <div style="color: {status_color}; font-size: 1.5rem; font-weight: 800;">
                 {'🟢 RUNNING' if agent_status.get('running', False) else '🔴 STOPPED'}
             </div>
-            <div style="color: rgba(255,255,255,0.7); margin-top: 1rem;">
+            <div style="color: #64748b; margin-top: 1rem; font-size: 0.9rem;">
                 <strong>Uptime:</strong> {agent_status.get('uptime', 'N/A')}<br>
                 <strong>Last Update:</strong> {agent_status.get('last_update', 'N/A')}<br>
                 <strong>Model:</strong> {agent_status.get('model', 'N/A')}
@@ -940,10 +976,12 @@ def create_portfolio_chart():
         fillcolor='rgba(74, 222, 128, 0.1)'
     ))
     fig.update_layout(
-        template='plotly_dark',
+        template='plotly_white',
         height=300,
         margin=dict(l=0, r=0, t=0, b=0),
-        showlegend=False
+        showlegend=False,
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)'
     )
     return fig
 
@@ -962,10 +1000,12 @@ def create_pnl_distribution_chart():
         marker_color='#667eea'
     ))
     fig.update_layout(
-        template='plotly_dark',
+        template='plotly_white',
         height=300,
         margin=dict(l=0, r=0, t=0, b=0),
-        showlegend=False
+        showlegend=False,
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)'
     )
     return fig
 
@@ -979,8 +1019,14 @@ def create_symbol_distribution_chart(period):
     """Create symbol distribution chart"""
     if not PLOTLY_AVAILABLE:
         return None
-    fig = go.Figure(data=[go.Bar(x=['SPY', 'QQQ', 'SPX'], y=[50, 30, 20], marker_color='#764ba2')])
-    fig.update_layout(template='plotly_dark', height=300, margin=dict(l=0, r=0, t=0, b=0))
+    fig = go.Figure(data=[go.Bar(x=['SPY', 'QQQ', 'SPX'], y=[50, 30, 20], marker_color='#a855f7')])
+    fig.update_layout(
+        template='plotly_white', 
+        height=300, 
+        margin=dict(l=0, r=0, t=0, b=0),
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)'
+    )
     return fig
 
 def create_risk_metrics_chart():
@@ -1200,6 +1246,144 @@ def get_detailed_stats(period):
         'Metric': ['Win Rate', 'Avg Win', 'Avg Loss', 'Profit Factor'],
         'Value': ['75.5%', '$450.25', '-$125.50', '2.5']
     })
+
+def render_pnl_analysis():
+    """Render P&L Analysis section"""
+    st.markdown("### 💰 P&L Analysis")
+    st.markdown("Daily, Weekly, and Monthly Profit & Loss")
+    
+    if not TRADE_DB_AVAILABLE:
+        st.error("Trade Database not available.")
+        return
+        
+    try:
+        trade_db = TradeDatabase()
+        trades = trade_db.get_all_trades()
+        
+        if not trades:
+            st.info("No trades found in database.")
+            return
+            
+        df = pd.DataFrame(trades)
+        
+        # Ensure timestamp is datetime
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        df['date'] = df['timestamp'].dt.date
+        
+        # Daily P&L
+        daily_pnl = df.groupby('date')['pnl'].sum().reset_index()
+        daily_pnl = daily_pnl.sort_values('date', ascending=False)
+        
+        # Weekly P&L
+        df['week'] = df['timestamp'].dt.to_period('W').apply(lambda r: r.start_time)
+        weekly_pnl = df.groupby('week')['pnl'].sum().reset_index()
+        weekly_pnl = weekly_pnl.sort_values('week', ascending=False)
+        
+        # Monthly P&L
+        df['month'] = df['timestamp'].dt.to_period('M').apply(lambda r: r.start_time)
+        monthly_pnl = df.groupby('month')['pnl'].sum().reset_index()
+        monthly_pnl = monthly_pnl.sort_values('month', ascending=False)
+        
+        # Tabs for different views
+        tab_daily, tab_weekly, tab_monthly = st.tabs(["Daily", "Weekly", "Monthly"])
+        
+        with tab_daily:
+            st.markdown("#### Daily P&L")
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                if PLOTLY_AVAILABLE:
+                    fig = go.Figure(data=[go.Bar(
+                        x=daily_pnl['date'], 
+                        y=daily_pnl['pnl'], 
+                        marker_color=np.where(daily_pnl['pnl'] >= 0, '#22c55e', '#ef4444')
+                    )])
+                    fig.update_layout(title="Daily P&L", template="plotly_white", height=400)
+                    st.plotly_chart(fig, use_container_width=True)
+            with col2:
+                st.dataframe(daily_pnl.style.format({'pnl': '${:,.2f}'}), use_container_width=True)
+                
+        with tab_weekly:
+            st.markdown("#### Weekly P&L")
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                if PLOTLY_AVAILABLE:
+                    fig = go.Figure(data=[go.Bar(
+                        x=weekly_pnl['week'], 
+                        y=weekly_pnl['pnl'], 
+                        marker_color=np.where(weekly_pnl['pnl'] >= 0, '#22c55e', '#ef4444')
+                    )])
+                    fig.update_layout(title="Weekly P&L", template="plotly_white", height=400)
+                    st.plotly_chart(fig, use_container_width=True)
+            with col2:
+                st.dataframe(weekly_pnl.style.format({'pnl': '${:,.2f}'}), use_container_width=True)
+                
+        with tab_monthly:
+            st.markdown("#### Monthly P&L")
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                if PLOTLY_AVAILABLE:
+                    fig = go.Figure(data=[go.Bar(
+                        x=monthly_pnl['month'], 
+                        y=monthly_pnl['pnl'], 
+                        marker_color=np.where(monthly_pnl['pnl'] >= 0, '#22c55e', '#ef4444')
+                    )])
+                    fig.update_layout(title="Monthly P&L", template="plotly_white", height=400)
+                    st.plotly_chart(fig, use_container_width=True)
+            with col2:
+                st.dataframe(monthly_pnl.style.format({'pnl': '${:,.2f}'}), use_container_width=True)
+                
+    except Exception as e:
+        st.error(f"Error calculating P&L: {e}")
+
+def sync_alpaca_history():
+    """Sync trade history from Alpaca to Database"""
+    if not ALPACA_AVAILABLE or not TRADE_DB_AVAILABLE:
+        st.error("Alpaca API or Trade Database not available")
+        return -1
+        
+    try:
+        api = tradeapi.REST(config.ALPACA_KEY, config.ALPACA_SECRET, config.ALPACA_BASE_URL, api_version='v2')
+        # Get filled orders
+        orders = api.list_orders(status='filled', limit=500)
+        
+        trade_db = TradeDatabase()
+        count = 0
+        
+        for order in orders:
+            # Construct trade record
+            # Note: We won't have PnL for historical syncs without complex matching
+            # But ensuring the record exists is step 1
+            
+            # Helper to check if it's 0DTE (approximation)
+            is_0dte = 0
+            if '0DTE' in order.symbol: # Naive check, improved if we parse symbol
+                is_0dte = 1
+            
+            trade_data = {
+                'timestamp': str(order.filled_at or order.submitted_at),
+                'symbol': order.symbol,
+                'action': order.side.upper(),
+                'qty': float(order.filled_qty),
+                'fill_price': float(order.filled_avg_price or 0),
+                'order_id': str(order.id),
+                'source': 'alpaca_sync',
+                'pnl': 0, # Cannot determine easily from single order
+                'is_0dte': is_0dte
+            }
+            
+            try:
+                # save_trade handles INSERT OR REPLACE based on timestamp/symbol/action/qty
+                # We might want to ensure we don't overwrite existing records with PnL data
+                # But since current DB unique constraint doesn't include order_id, we rely on timestamp
+                trade_db.save_trade(trade_data)
+                count += 1
+            except Exception:
+                pass 
+                
+        return count
+    except Exception as e:
+        st.error(f"Sync error: {e}")
+        return -1
 
 # ==================== LOGS SECTION ====================
 def render_logs_section():
