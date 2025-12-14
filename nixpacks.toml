@@ -1,0 +1,9 @@
+[phases.setup]
+nixPkgs = ["python310", "gcc", "zlib"]
+
+[phases.install]
+cmds = ["python -m venv .venv", ". .venv/bin/activate", "pip install -r requirements.txt"]
+
+[phases.start]
+cmds = [". .venv/bin/activate && streamlit run dashboard_app.py --server.port=$PORT --server.address=0.0.0.0 --server.headless=true"]
+
