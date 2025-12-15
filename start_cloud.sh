@@ -1,0 +1,14 @@
+#!/bin/bash
+# Start Streamlit Dashboard in the background
+streamlit run dashboard_app.py --server.port=$PORT --server.address=0.0.0.0 --server.headless=true &
+
+# Start Trading Agent (in Live Mode if configured, otherwise Paper)
+# Use --live flag if MODE env var is set to 'live', otherwise defaults to paper
+if [ "$MODE" = "live" ]; then
+    echo "🚀 Starting Agent in LIVE mode..."
+    python mike_agent_live_safe.py --live --key "$ALPACA_KEY" --secret "$ALPACA_SECRET"
+else
+    echo "🧪 Starting Agent in PAPER mode..."
+    python mike_agent_live_safe.py --key "$ALPACA_KEY" --secret "$ALPACA_SECRET"
+fi
+
