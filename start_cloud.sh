@@ -1,6 +1,17 @@
 #!/bin/bash
+# Activate venv if it exists (Railway/Nixpacks specific)
+if [ -d ".venv" ]; then
+    source .venv/bin/activate
+fi
+
+# Default to port 8080 if PORT is not set
+PORT="${PORT:-8080}"
+
+echo "🚀 Starting Cloud Deployment on PORT $PORT"
+
 # Start Streamlit Dashboard in the background
 streamlit run dashboard_app.py --server.port=$PORT --server.address=0.0.0.0 --server.headless=true &
+
 
 # Start Trading Agent (in Live Mode if configured, otherwise Paper)
 # Use --live flag if MODE env var is set to 'live', otherwise defaults to paper
