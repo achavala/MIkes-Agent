@@ -50,7 +50,7 @@ def render_data_integrity_panel():
                 }
                 for provider in ['massive', 'alpaca', 'polygon', 'yfinance']
             ])
-            st.dataframe(usage_df, use_container_width=True, hide_index=True)
+            st.dataframe(usage_df, width="stretch", hide_index=True)
             
             # Red flag warning
             if stats.get('yfinance_red_flag', False):
@@ -65,7 +65,7 @@ def render_data_integrity_panel():
                 # Show last 100 logs
                 recent_logs = logs[-100:]
                 logs_df = pd.DataFrame(recent_logs)
-                st.dataframe(logs_df, use_container_width=True, height=400)
+                st.dataframe(logs_df, width="stretch", height=400)
             else:
                 st.info("No provider logs available yet. Run a backtest to generate logs.")
         else:

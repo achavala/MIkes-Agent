@@ -55,5 +55,5 @@ echo ""
 echo "   Press Ctrl+C to stop"
 echo ""
 
-streamlit run dashboard_app.py --server.port 8501 --server.headless true
+python3 -m streamlit run dashboard_app.py --server.port 8501 --server.headless true
 

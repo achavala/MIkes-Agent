@@ -31,8 +31,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     import alpaca_trade_api as tradeapi
     try:
-        import config
-    except ImportError:
+        if os.path.exists("config.py"):
+            import config
+        else:
+            raise ImportError("config.py not found")
+    except (ImportError, Exception):
         # Create a mock config from environment variables (for Railway)
         class Config:
             ALPACA_KEY = os.environ.get('ALPACA_KEY', '')
@@ -498,7 +501,7 @@ def render_dashboard():
     st.markdown("### 📋 Active Positions")
     positions_df = get_active_positions()
     if not positions_df.empty:
-        st.dataframe(positions_df, use_container_width=True, hide_index=True)
+        st.dataframe(positions_df, width="stretch", hide_index=True)
     else:
         st.info("No active positions")
 
@@ -551,7 +554,7 @@ def render_analytics():
     # Detailed statistics table
     st.markdown("### 📊 Detailed Statistics")
     stats_df = get_detailed_stats(period)
-    st.dataframe(stats_df, use_container_width=True, hide_index=True)
+    st.dataframe(stats_df, width="stretch", hide_index=True)
     
     # Add Logs, Feedback, Data Integrity, and P&L Analysis tabs
     st.markdown("---")
@@ -608,7 +611,7 @@ def render_trades():
         trades_df = get_trades_data(symbol_filter, date_range, status_filter)
         
         if not trades_df.empty:
-            st.dataframe(trades_df, use_container_width=True, hide_index=True)
+            st.dataframe(trades_df, width="stretch", hide_index=True)
             
             # Trade details
             if st.checkbox("Show Trade Details"):
@@ -1281,7 +1284,7 @@ def run_backtest_ui(start_date, end_date, symbols_input, initial_capital):
             ]
         }
         summary_df = pd.DataFrame(summary_data)
-        st.dataframe(summary_df, use_container_width=True, hide_index=True)
+        st.dataframe(summary_df, width="stretch", hide_index=True)
         
     except Exception as e:
         st.error(f"Backtest failed: {str(e)}")
@@ -1351,7 +1354,7 @@ def render_pnl_analysis():
                     fig.update_layout(title="Daily P&L", template="plotly_white", height=400)
                     st.plotly_chart(fig, use_container_width=True)
             with col2:
-                st.dataframe(daily_pnl.style.format({'pnl': '${:,.2f}'}), use_container_width=True)
+                st.dataframe(daily_pnl.style.format({'pnl': '${:,.2f}'}), width="stretch")
                 
         with tab_weekly:
             st.markdown("#### Weekly P&L")
@@ -1366,7 +1369,7 @@ def render_pnl_analysis():
                     fig.update_layout(title="Weekly P&L", template="plotly_white", height=400)
                     st.plotly_chart(fig, use_container_width=True)
             with col2:
-                st.dataframe(weekly_pnl.style.format({'pnl': '${:,.2f}'}), use_container_width=True)
+                st.dataframe(weekly_pnl.style.format({'pnl': '${:,.2f}'}), width="stretch")
                 
         with tab_monthly:
             st.markdown("#### Monthly P&L")
@@ -1381,7 +1384,7 @@ def render_pnl_analysis():
                     fig.update_layout(title="Monthly P&L", template="plotly_white", height=400)
                     st.plotly_chart(fig, use_container_width=True)
             with col2:
-                st.dataframe(monthly_pnl.style.format({'pnl': '${:,.2f}'}), use_container_width=True)
+                st.dataframe(monthly_pnl.style.format({'pnl': '${:,.2f}'}), width="stretch")
                 
     except Exception as e:
         st.error(f"Error calculating P&L: {e}")
@@ -1475,7 +1478,7 @@ def render_logs_section():
                 logs_df = pd.DataFrame(logs)
                 
                 # Display logs table
-                st.dataframe(logs_df, use_container_width=True, height=400)
+                st.dataframe(logs_df, width="stretch", height=400)
                 
                 # Generate summary statistics
                 if log_category == "decisions":

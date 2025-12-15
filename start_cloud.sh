@@ -1,4 +1,6 @@
 #!/bin/bash
+set -e
+
 # Activate venv if it exists (Railway/Nixpacks specific)
 if [ -d ".venv" ]; then
     source .venv/bin/activate
@@ -7,7 +9,11 @@ fi
 # Default to port 8080 if PORT is not set
 PORT="${PORT:-8080}"
 
-echo "🚀 Starting Cloud Deployment on PORT $PORT"
+echo "=================================================="
+echo "🚀 STARTING MIKE AGENT CLOUD DEPLOYMENT"
+echo "=================================================="
+echo "   PORT: $PORT"
+echo "   MODE: ${MODE:-paper (default)}"
 
 # Log the running version (Tag/Commit)
 echo "📦 Version Info:"
@@ -18,17 +24,27 @@ else
   echo "   Git info not available"
 fi
 
+echo "--------------------------------------------------"
+echo "1️⃣  Starting Dashboard (Background Service)"
 # Start Streamlit Dashboard in the background
 streamlit run dashboard_app.py --server.port=$PORT --server.address=0.0.0.0 --server.headless=true &
+DASHBOARD_PID=$!
+echo "   ✅ Dashboard started with PID $DASHBOARD_PID"
 
-
+echo "--------------------------------------------------"
+echo "2️⃣  Starting Trading Agent (Foreground Service)"
 # Start Trading Agent (in Live Mode if configured, otherwise Paper)
-# Use --live flag if MODE env var is set to 'live', otherwise defaults to paper
 if [ "$MODE" = "live" ]; then
     echo "🚀 Starting Agent in LIVE mode..."
-    python mike_agent_live_safe.py --live --key "$ALPACA_KEY" --secret "$ALPACA_SECRET"
+    # Using python -u for unbuffered output so logs show up immediately in Railway
+    python -u mike_agent_live_safe.py --live --key "$ALPACA_KEY" --secret "$ALPACA_SECRET"
 else
     echo "🧪 Starting Agent in PAPER mode..."
-    python mike_agent_live_safe.py --key "$ALPACA_KEY" --secret "$ALPACA_SECRET"
+    python -u mike_agent_live_safe.py --key "$ALPACA_KEY" --secret "$ALPACA_SECRET"
 fi
 
+# Wait for any process to exit
+wait -n
+  
+# Exit with status of process that exited first
+exit $?
