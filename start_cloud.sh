@@ -9,6 +9,15 @@ PORT="${PORT:-8080}"
 
 echo "🚀 Starting Cloud Deployment on PORT $PORT"
 
+# Log the running version (Tag/Commit)
+echo "📦 Version Info:"
+if git rev-parse --is-inside-work-tree > /dev/null 2>&1; then
+  echo "   Commit: $(git rev-parse --short HEAD)"
+  echo "   Tag:    $(git describe --tags --exact-match 2>/dev/null || echo 'No exact tag')"
+else
+  echo "   Git info not available"
+fi
+
 # Start Streamlit Dashboard in the background
 streamlit run dashboard_app.py --server.port=$PORT --server.address=0.0.0.0 --server.headless=true &
 
