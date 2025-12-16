@@ -1,0 +1,23 @@
+# fly.toml app configuration file for mike-agent-project
+# Using frozen tag: Freeze-for-Paper-Trade-Deployment-Ready
+# Configured with HTTP service for Streamlit dashboard access (web & mobile)
+
+app = 'mike-agent-project'
+primary_region = 'dfw'
+
+[build]
+
+# HTTP service for Streamlit dashboard (web & mobile access)
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ['app']
+
+# VM configuration
+[[vm]]
+  memory = '2gb'
+  cpus = 2
+  memory_mb = 2048

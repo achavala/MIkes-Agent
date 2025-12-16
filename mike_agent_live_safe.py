@@ -2188,32 +2188,34 @@ def prepare_observation_basic(data: pd.DataFrame, risk_mgr: RiskManager, symbol:
         except Exception as e:
             pass  # Keep zeros if error
     
-    # FINAL OBSERVATION (20 × 27) - Added 4 portfolio Greeks features
+    # FINAL OBSERVATION (20 × 23) - Model expects exactly 23 features
+    # Note: Portfolio Greeks (4 features) removed to match training (20×23)
     obs = np.column_stack([
-        o, h, l, c, v,
-        vix_norm,
-        vix_delta_norm,
-        ema_diff,
-        vwap_dist,
-        rsi_scaled,
-        macd_hist,
-        atr_scaled,
-        body_ratio,
-        wick_ratio,
-        pullback,
-        breakout,
-        trend_slope,
-        burst,
-        trend_strength,
-        greeks[:,0],
-        greeks[:,1],
-        greeks[:,2],
-        greeks[:,3],
-        portfolio_delta_norm,
-        portfolio_gamma_norm,
-        portfolio_theta_norm,
-        portfolio_vega_norm,
+        o, h, l, c, v,                    # 5 features: OHLCV
+        vix_norm,                         # 1 feature: VIX
+        vix_delta_norm,                   # 1 feature: VIX delta
+        ema_diff,                         # 1 feature: EMA 9/20 diff
+        vwap_dist,                        # 1 feature: VWAP distance
+        rsi_scaled,                       # 1 feature: RSI
+        macd_hist,                        # 1 feature: MACD histogram
+        atr_scaled,                       # 1 feature: ATR
+        body_ratio,                       # 1 feature: Candle body ratio
+        wick_ratio,                       # 1 feature: Candle wick ratio
+        pullback,                         # 1 feature: Pullback
+        breakout,                         # 1 feature: Breakout
+        trend_slope,                      # 1 feature: Trend slope
+        burst,                            # 1 feature: Momentum burst
+        trend_strength,                   # 1 feature: Trend strength
+        greeks[:,0],                      # 1 feature: Delta
+        greeks[:,1],                      # 1 feature: Gamma
+        greeks[:,2],                      # 1 feature: Theta
+        greeks[:,3],                      # 1 feature: Vega
+        # Portfolio Greeks removed (4 features) - model trained on 23 features only
     ]).astype(np.float32)
+    
+    # Ensure shape is exactly (20, 23)
+    if obs.shape[1] != 23:
+        obs = obs[:, :23]  # Slice to 23 features if somehow more
     
     return np.clip(obs, -10.0, 10.0)
 
@@ -2523,11 +2525,33 @@ def run_safe_live_trading():
                         action_raw = None
                         try:
                             import torch
-                            # Convert observation to tensor
-                            obs_tensor = torch.FloatTensor(obs).unsqueeze(0)
                             
-                            # Get action distribution from policy
-                            if hasattr(model.policy, 'get_distribution'):
+                            # Check if this is a RecurrentPPO model (requires LSTM state handling)
+                            try:
+                                from sb3_contrib import RecurrentPPO
+                                is_recurrent = isinstance(model, RecurrentPPO)
+                            except ImportError:
+                                is_recurrent = False
+                            
+                            if is_recurrent:
+                                # RecurrentPPO: Use model.predict() directly (handles LSTM states internally)
+                                # Don't use get_distribution() - it requires lstm_states and episode_starts
+                                action_raw, lstm_state = model.predict(obs, deterministic=bool(risk_mgr.open_positions))
+                                if isinstance(action_raw, np.ndarray):
+                                    rl_action = int(action_raw.item() if action_raw.ndim == 0 else action_raw[0])
+                                else:
+                                    rl_action = int(action_raw)
+                                # Estimate strength for RecurrentPPO (conservative)
+                                if rl_action in (1, 2):
+                                    action_strength = 0.65
+                                elif rl_action == 0:
+                                    action_strength = 0.50
+                                else:
+                                    action_strength = 0.35
+                                risk_mgr.log(f"🔍 {sym} RecurrentPPO predict: action={rl_action}, estimated_strength={action_strength:.3f}", "DEBUG")
+                            elif hasattr(model.policy, 'get_distribution'):
+                                # Non-recurrent models: Can use get_distribution for temperature calibration
+                                obs_tensor = torch.FloatTensor(obs).unsqueeze(0)
                                 action_dist = model.policy.get_distribution(obs_tensor)
                                 
                                 # Extract logits (works for both Categorical and MaskableCategorical)
