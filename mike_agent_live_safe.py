@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """
 MIKE AGENT v3 – RL EDITION – LIVE WITH ALPACA + 10X RISK SAFEGUARDS
 FINAL BATTLE-TESTED VERSION – SAFE FOR LIVE CAPITAL
@@ -6,7 +8,6 @@ FINAL BATTLE-TESTED VERSION – SAFE FOR LIVE CAPITAL
 THIS VERSION CANNOT BLOW UP
 10 layers of institutional-grade safeguards
 """
-from __future__ import annotations  # Postpone annotation evaluation (fixes forward references)
 import os
 import sys
 import time
