@@ -6,6 +6,7 @@ FINAL BATTLE-TESTED VERSION – SAFE FOR LIVE CAPITAL
 THIS VERSION CANNOT BLOW UP
 10 layers of institutional-grade safeguards
 """
+from __future__ import annotations  # Postpone annotation evaluation (fixes forward references)
 import os
 import sys
 import time
