@@ -182,6 +182,8 @@ except ImportError:
     TELEGRAM_AVAILABLE = False
     print("Warning: utils.telegram_alerts module not found. Telegram alerts disabled.")
 
+# 10-feature observation will be defined inline below
+
 # Configuration: Use institutional features (set to False for backward compatibility)
 USE_INSTITUTIONAL_FEATURES = True  # Enable institutional-grade features
 
@@ -387,9 +389,10 @@ USE_PAPER = os.getenv('ALPACA_PAPER', 'true').lower() == 'true'
 BASE_URL = PAPER_URL if USE_PAPER else LIVE_URL
 
 # ==================== MODEL CONFIG ====================
-# Use the newly trained LSTM model (500k timesteps, 1-minute bars, RecurrentPPO)
-# Trained on SPY, QQQ, SPX with human-momentum features and LSTM temporal intelligence
-MODEL_PATH = "models/mike_momentum_model_v3_lstm.zip"
+# Use the trained historical model (5M timesteps, 23.9 years of data, PPO)
+# Trained on SPY, QQQ, SPX with historical data (2002-2025) and regime-aware sampling
+# Completed: December 9, 2025
+MODEL_PATH = "models/mike_historical_model.zip"
 LOOKBACK = 20
 
 # ==================== ACTION MAPPING (CANONICAL) ====================
@@ -1064,10 +1067,15 @@ def get_market_data(symbol: str, period: str = "2d", interval: str = "1m", api: 
                 timeframe = TimeFrame.Minute  # Default to 1 minute
             
             # Get bars from Alpaca (limit 5000 bars per request)
-            # For 2 days of 1-minute data: 2 * 1440 = 2880 bars (well within limit)
+            # For 2 days of 1-minute data: 
+            # - Market hours only: ~780 bars (390 min/day × 2 days)
+            # - Market + extended hours: ~1,920 bars (960 min/day × 2 days)
+            # - Full 24/7: ~2,880 bars (1,440 min/day × 2 days) - unrealistic for stock markets
             # Alpaca API v2: Use date strings in YYYY-MM-DD format (most reliable)
+            # Ensure we include today's data by using tomorrow as end date (exclusive end)
             start_str = start_date.strftime("%Y-%m-%d")
-            end_str = end_date.strftime("%Y-%m-%d")
+            # Use tomorrow as end date to ensure we get today's data (Alpaca end date is exclusive)
+            end_str = (end_date + timedelta(days=1)).strftime("%Y-%m-%d")
             
             # Log attempt for debugging
             if risk_mgr and hasattr(risk_mgr, 'log'):
@@ -1109,19 +1117,28 @@ def get_market_data(symbol: str, period: str = "2d", interval: str = "1m", api: 
                                 bars = bars.rename(columns={lower_col: req_col})
                 
                 # Check if Alpaca returned sufficient data for 2 days
-                # Expected: ~2,880 bars for full 2 days (1,440 min/day × 2)
-                # Alpaca often returns only market hours (~1,800 bars)
-                # If insufficient, try Massive API which has 1-minute granular package
+                # Realistic expectations for 2 days of 1-minute data:
+                # - Market hours only: ~780 bars (390 min/day × 2 days)
+                # - Market + extended hours: ~1,920 bars (960 min/day × 2 days) ✅ This is what we're getting
+                # - Full 24/7: ~2,880 bars (1,440 min/day × 2 days) - unrealistic for stock markets
+                # 
+                # ~1,800 bars is actually GOOD - it includes market hours + extended hours
+                # Both Alpaca and Massive return similar amounts because that's all the data available
                 bars_count = len(bars)
-                expected_min_bars = 2000 if period == "2d" else 1000  # Minimum threshold
+                
+                # For 2 days, expect at least 1,500 bars (market hours + some extended hours)
+                # If we get less, try Massive API as backup
+                expected_min_bars = 1500 if period == "2d" else 700  # Realistic threshold
                 
                 if bars_count < expected_min_bars and period == "2d":
                     if risk_mgr and hasattr(risk_mgr, 'log'):
-                        risk_mgr.log(f"⚠️ Alpaca API returned only {bars_count} bars for 2 days (expected ~2,880). Trying Massive API for complete data...", "WARNING")
+                        risk_mgr.log(f"⚠️ Alpaca API returned only {bars_count} bars for 2 days (expected at least {expected_min_bars}). Trying Massive API...", "WARNING")
                     # Don't return yet - try Massive API for better data
                 else:
-                    # Alpaca data is sufficient, return it
+                    # Alpaca data is sufficient (1,800+ bars is good for market hours + extended hours)
                     log_data_source("Alpaca API", bars_count, symbol)
+                    if risk_mgr and hasattr(risk_mgr, 'log') and bars_count >= 1500:
+                        risk_mgr.log(f"✅ Alpaca API returned {bars_count} bars (market hours + extended hours) - sufficient for RL model", "INFO")
                     return bars
             else:
                 if risk_mgr and hasattr(risk_mgr, 'log'):
@@ -1158,8 +1175,10 @@ def get_market_data(symbol: str, period: str = "2d", interval: str = "1m", api: 
             
             # Massive API needs date strings in YYYY-MM-DD format
             # Get data from (days) days ago to today (inclusive)
-            end_date_str = datetime.now().strftime("%Y-%m-%d")
-            start_date_str = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+            # Use tomorrow as end date to ensure we get today's data (Massive API end date may be exclusive)
+            now = datetime.now()
+            end_date_str = (now + timedelta(days=1)).strftime("%Y-%m-%d")  # Tomorrow to include today
+            start_date_str = (now - timedelta(days=days)).strftime("%Y-%m-%d")
             
             # Log attempt for debugging
             if risk_mgr and hasattr(risk_mgr, 'log'):
@@ -1202,16 +1221,17 @@ def get_market_data(symbol: str, period: str = "2d", interval: str = "1m", api: 
                         pass
                 
                 # CRITICAL FIX: Return ALL data, not just last 50 bars!
-                # Massive API with 1-minute granular package should return full 2 days
+                # Massive API with 1-minute granular package returns market hours + extended hours
+                # Realistic expectation: ~1,800-1,900 bars for 2 days (market + extended hours)
                 hist_count = len(hist)
                 log_data_source("Massive API", hist_count, symbol)
                 
                 # Compare with Alpaca data if we have it
                 if risk_mgr and hasattr(risk_mgr, 'log'):
-                    if hist_count < 2000 and period == "2d":
-                        risk_mgr.log(f"⚠️ Massive API returned {hist_count} bars for 2 days (expected ~2,880). May be market hours only.", "WARNING")
-                    elif hist_count >= 2000:
-                        risk_mgr.log(f"✅ Massive API returned {hist_count} bars - using complete dataset for {symbol}", "INFO")
+                    if hist_count < 1500 and period == "2d":
+                        risk_mgr.log(f"⚠️ Massive API returned {hist_count} bars for 2 days (expected at least 1,500). May be incomplete.", "WARNING")
+                    elif hist_count >= 1500:
+                        risk_mgr.log(f"✅ Massive API returned {hist_count} bars (market hours + extended hours) - using complete dataset for {symbol}", "INFO")
                 
                 return hist
             else:
@@ -2342,14 +2362,118 @@ else:
 # ==================== OBSERVATION PREPARATION ====================
 def prepare_observation(data: pd.DataFrame, risk_mgr: RiskManager, symbol: str = 'SPY') -> np.ndarray:
     """
-    Prepare observation for RL model - ALWAYS uses 23-feature version.
+    Prepare observation for RL model - routes to correct version based on model.
     
-    The trained model REQUIRES (20, 23) observation space with exact feature order.
-    This function ALWAYS routes to prepare_observation_basic() which produces
-    the exact 23-feature observation matching training.
+    The historical model (mike_historical_model.zip) uses (20, 10) features:
+    - OHLCV (5) + VIX (1) + Greeks (4) = 10 features
+    
+    The momentum model (mike_momentum_model_v3_lstm.zip) uses (20, 23) features:
+    - OHLCV (5) + VIX (2) + Technical (11) + Greeks (4) + Other (1) = 23 features
     """
-    # ALWAYS use the 23-feature version that matches training
-    return prepare_observation_basic(data, risk_mgr, symbol)
+    # Check which model we're using
+    if "mike_historical_model" in MODEL_PATH:
+        # Use 10-feature observation for historical model
+        return prepare_observation_10_features_inline(data, risk_mgr, symbol)
+    else:
+        # Use 23-feature observation for momentum model
+        return prepare_observation_basic(data, risk_mgr, symbol)
+
+def prepare_observation_10_features_inline(data: pd.DataFrame, risk_mgr: RiskManager, symbol: str = 'SPY') -> np.ndarray:
+    """
+    Inline 10-feature observation preparation (fallback if module not available)
+    Matches historical training: OHLCV (5) + VIX (1) + Greeks (4) = 10 features
+    """
+    LOOKBACK = 20
+    
+    # Pad if needed
+    if len(data) < LOOKBACK:
+        padding = pd.concat([data.iloc[[-1]]] * (LOOKBACK - len(data)))
+        data = pd.concat([padding, data])
+    
+    recent = data.tail(LOOKBACK).copy()
+    
+    # Handle column name variations
+    if 'Close' in recent.columns:
+        recent = recent.rename(columns={'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': 'close', 'Volume': 'volume'})
+    elif 'close' not in recent.columns:
+        for col in recent.columns:
+            if col.lower() in ['close', 'c']:
+                recent = recent.rename(columns={col: 'close'})
+    
+    # Extract OHLCV
+    closes = recent['close'].astype(float).values
+    highs  = recent['high'].astype(float).values
+    lows   = recent['low'].astype(float).values
+    opens  = recent['open'].astype(float).values
+    vols   = recent['volume'].astype(float).values
+    
+    # Base price for normalization
+    base = float(closes[0]) if float(closes[0]) != 0 else 1.0
+    
+    # Normalize OHLC (% change from base)
+    o = (opens  - base) / base * 100.0
+    h = (highs  - base) / base * 100.0
+    l = (lows   - base) / base * 100.0
+    c = (closes - base) / base * 100.0
+    
+    # Normalized volume
+    maxv = vols.max() if vols.max() > 0 else 1.0
+    v = vols / maxv
+    
+    # VIX (constant across window)
+    vix_value = risk_mgr.get_current_vix() if risk_mgr else 20.0
+    vix_norm = np.full(LOOKBACK, (vix_value / 50.0) if vix_value else 0.4, dtype=np.float32)
+    
+    # Greeks (delta/gamma/theta/vega) - constant across window if no position
+    greeks = np.zeros((LOOKBACK, 4), dtype=np.float32)
+    
+    # Try to get Greeks if we have a position and calculator
+    position = None
+    if risk_mgr and hasattr(risk_mgr, 'open_positions') and risk_mgr.open_positions:
+        first_pos = list(risk_mgr.open_positions.values())[0]
+        position = {
+            "strike": first_pos.get('strike', closes[-1]),
+            "option_type": first_pos.get('type', 'call')
+        }
+    
+    if position and GREEKS_CALCULATOR_AVAILABLE and greeks_calc:
+        try:
+            g = greeks_calc.calculate_greeks(
+                S=closes[-1],
+                K=position["strike"],
+                T=(1.0 / (252 * 6.5)),  # 0DTE approximation
+                sigma=(vix_value / 100.0) * 1.3 if vix_value else 0.20,
+                option_type=position["option_type"]
+            )
+            # Fill all bars with same Greeks (constant for window)
+            greeks[:] = [
+                float(np.clip(g.get("delta", 0), -1, 1)),
+                float(np.tanh(g.get("gamma", 0) * 100)),
+                float(np.tanh(g.get("theta", 0) / 10)),
+                float(np.tanh(g.get("vega", 0) / 10)),
+            ]
+        except Exception:
+            pass  # Keep zeros
+    
+    # FINAL OBSERVATION (20 × 10)
+    obs = np.column_stack([
+        o, h, l, c, v,                    # 5 features: OHLCV
+        vix_norm,                         # 1 feature: VIX
+        greeks[:,0],                      # 1 feature: Delta
+        greeks[:,1],                      # 1 feature: Gamma
+        greeks[:,2],                      # 1 feature: Theta
+        greeks[:,3],                      # 1 feature: Vega
+    ]).astype(np.float32)
+    
+    # Ensure shape is exactly (20, 10)
+    if obs.shape != (20, 10):
+        if obs.shape[1] > 10:
+            obs = obs[:, :10]
+        elif obs.shape[1] < 10:
+            padding = np.zeros((20, 10 - obs.shape[1]), dtype=np.float32)
+            obs = np.column_stack([obs, padding])
+    
+    return np.clip(obs, -10.0, 10.0)
 
 def prepare_observation_basic(data: pd.DataFrame, risk_mgr: RiskManager, symbol: str = 'SPY') -> np.ndarray:
     """
