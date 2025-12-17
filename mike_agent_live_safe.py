@@ -1397,7 +1397,6 @@ def load_rl_model():
         print(f"   Model path: {MODEL_PATH}")
         print(f"   File exists: {os.path.exists(MODEL_PATH)}")
         if os.path.exists(MODEL_PATH):
-            import os
             size = os.path.getsize(MODEL_PATH)
             print(f"   File size: {size:,} bytes ({size/1024/1024:.2f} MB)")
         raise RuntimeError(
