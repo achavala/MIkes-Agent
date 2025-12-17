@@ -205,17 +205,23 @@ echo "✅ Dashboard started (PID: $DASHBOARD_PID)"
 
 # Start the trading agent in the background
 echo "🤖 Starting trading agent..."
-python mike_agent_live_safe.py &
+# Redirect stderr to stdout so we can see errors in logs
+python mike_agent_live_safe.py > /tmp/agent.log 2>&1 &
 AGENT_PID=$!
 
 # Wait a moment for agent to initialize
-sleep 2
+sleep 5
 
 # Check if agent started successfully
 if ! kill -0 $AGENT_PID 2>/dev/null; then
-    echo "⚠️  Agent may have failed to start, but continuing with dashboard..."
+    echo "⚠️  Agent may have failed to start, checking logs..."
+    cat /tmp/agent.log 2>/dev/null || echo "No agent logs found"
+    echo "⚠️  Continuing with dashboard..."
 else
     echo "✅ Agent started (PID: $AGENT_PID)"
+    # Show first few lines of agent output
+    echo "📋 Agent startup output:"
+    head -20 /tmp/agent.log 2>/dev/null || echo "No agent output yet"
 fi
 
 # Function to handle shutdown
