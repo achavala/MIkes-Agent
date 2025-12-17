@@ -48,6 +48,8 @@ COPY core/ ./core/
 COPY utils/ ./utils/
 COPY dashboard_app.py .
 COPY mike_agent_live_safe.py .
+# Copy models directory (includes trained historical model)
+COPY models/ ./models/
 # Copy other essential Python files (but not test files - excluded by .dockerignore)
 COPY *.py ./
 

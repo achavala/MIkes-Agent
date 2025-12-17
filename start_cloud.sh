@@ -39,7 +39,8 @@ MODE=${MODE:-paper}
 echo "🧪 Starting Agent in ${MODE^^} mode..."
 
 # Model download logic (FULLY AUTOMATIC - no manual intervention needed)
-MODEL_PATH="models/mike_momentum_model_v3_lstm.zip"
+# Use the trained historical model (5M timesteps, 23.9 years of data)
+MODEL_PATH="models/mike_historical_model.zip"
 MODEL_DIR="models"
 
 # Create models directory if it doesn't exist
