@@ -161,25 +161,48 @@ except ImportError:
     DRIFT_DETECTION_AVAILABLE = False
     print("Warning: drift_detection module not found. Drift detection disabled.")
 
+# Import Telegram alerts
+try:
+    from utils.telegram_alerts import (
+        send_entry_alert,
+        send_exit_alert,
+        send_block_alert,
+        send_error_alert,
+        send_daily_summary,
+        send_info,
+        send_warning,
+        is_configured as telegram_configured
+    )
+    TELEGRAM_AVAILABLE = True
+    if telegram_configured():
+        print("✅ Telegram alerts configured")
+    else:
+        print("ℹ️  Telegram alerts available but not configured (set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)")
+except ImportError:
+    TELEGRAM_AVAILABLE = False
+    print("Warning: utils.telegram_alerts module not found. Telegram alerts disabled.")
+
 # Configuration: Use institutional features (set to False for backward compatibility)
 USE_INSTITUTIONAL_FEATURES = True  # Enable institutional-grade features
 
 # ==================== TRADING SYMBOLS ====================
 # Symbols to trade (0DTE options)
-TRADING_SYMBOLS = ['SPY', 'QQQ', 'SPX']  # Can trade all three
+# NOTE: SPX options are NOT available in Alpaca paper trading (index options require special permissions)
+# Using SPY/QQQ only (ETFs fully supported in paper trading)
+TRADING_SYMBOLS = ['SPY', 'QQQ']  # SPX removed - not available in Alpaca paper trading
 
 # ==================== RISK LIMITS (HARD-CODED – CANNOT BE OVERRIDDEN) ====================
 DAILY_LOSS_LIMIT = -0.15  # -15% daily loss limit
 HARD_DAILY_LOSS_DOLLAR = -500  # Hard stop: Stop trading if daily loss > $500 (absolute dollar limit)
 MAX_POSITION_PCT = 0.25  # Max 25% of equity in one position
-MAX_CONCURRENT = 3  # Max 3 positions at once (one per symbol: SPY, QQQ, SPX)
-MAX_TRADES_PER_SYMBOL = 100  # Max 100 trades per symbol per day (very high limit - trade as much as setup allows)
-MIN_TRADE_COOLDOWN_SECONDS = 5  # Minimum 5 seconds between ANY trades (prevents cascading issues)
+MAX_CONCURRENT = 2  # Max 2 positions at once (one per symbol: SPY, QQQ)
+MAX_TRADES_PER_SYMBOL = 10  # Max 10 trades per symbol per day (reduced from 100 to prevent overtrading)
+MIN_TRADE_COOLDOWN_SECONDS = 60  # Minimum 60 seconds between ANY trades (increased from 5s to prevent rapid-fire trading)
 VIX_KILL = 28  # No trades if VIX > 28
 IVR_MIN = 30  # Minimum IV Rank (0-100)
-# Entry time filter (disabled by default per user request).
-# If you ever want to re-enable, set to e.g. "14:30".
-NO_TRADE_AFTER = None  # type: Optional[str]
+# Entry time filter (disabled per user request)
+NO_TRADE_AFTER = None  # type: Optional[str]  # No time restriction - trading allowed all day
+MIN_ACTION_STRENGTH_THRESHOLD = 0.65  # Minimum confidence (0.65 = 65%) required to execute trades (prevents weak signals)
 MAX_DRAWDOWN = 0.30  # Full shutdown if -30% from peak
 MAX_NOTIONAL = 50000  # Max $50k notional per order
 DUPLICATE_ORDER_WINDOW = 300  # 5 minutes in seconds (per symbol)
@@ -387,19 +410,23 @@ def get_action_name(action: int) -> str:
 
 # ==================== MASSIVE API CONFIG ====================
 USE_MASSIVE_API = os.getenv('USE_MASSIVE_API', 'true').lower() == 'true'
-MASSIVE_API_KEY = os.getenv('MASSIVE_API_KEY', '')
+MASSIVE_API_KEY = os.getenv('MASSIVE_API_KEY', '') or os.getenv('POLYGON_API_KEY', '')  # Support both env var names
 massive_client = None
 
 if USE_MASSIVE_API and MASSIVE_API_KEY:
     try:
         massive_client = MassiveAPIClient(MASSIVE_API_KEY)
-        print("✅ Massive API client initialized (using real-time data)")
+        print("✅ Massive API client initialized (1-minute granular package enabled)")
+        print(f"   API Key: {MASSIVE_API_KEY[:10]}...{MASSIVE_API_KEY[-5:] if len(MASSIVE_API_KEY) > 15 else '***'}")
     except Exception as e:
         print(f"⚠️  Failed to initialize Massive API client: {e}")
-        print("   Falling back to yfinance")
+        print(f"   Please check MASSIVE_API_KEY or POLYGON_API_KEY environment variable")
         massive_client = None
 else:
-    print("ℹ️  Using yfinance for market data (set USE_MASSIVE_API=true and MASSIVE_API_KEY to enable Massive API)")
+    if not MASSIVE_API_KEY:
+        print("ℹ️  Massive API not configured (set MASSIVE_API_KEY or POLYGON_API_KEY to enable)")
+    else:
+        print(f"ℹ️  Massive API disabled (set USE_MASSIVE_API=true to enable)")
 
 # ==================== STATE TRACKING ====================
 class RiskManager:
@@ -968,33 +995,43 @@ def choose_best_symbol_for_trade(iteration: int, symbol_actions: dict, target_ac
     return selected_symbol
 
 
-def get_market_data(symbol: str, period: str = "2d", interval: str = "1m") -> pd.DataFrame:
+def get_market_data(symbol: str, period: str = "2d", interval: str = "1m", api: Optional[tradeapi.REST] = None, risk_mgr = None) -> pd.DataFrame:
     """
-    Get market data - tries Massive API first, falls back to yfinance
+    Get market data - tries Alpaca first (you're paying for it!), then Massive, then yfinance
+    
+    Priority:
+    1. Alpaca API (real-time, included with trading account)
+    2. Massive API (if available)
+    3. yfinance (free fallback, delayed)
     
     Args:
         symbol: Stock symbol (SPY, QQQ, SPX, etc.)
-        period: Period for yfinance (e.g., "2d", "1d")
+        period: Period for data (e.g., "2d", "1d")
         interval: Data interval ("1m", "5m", "1d", etc.)
+        api: Alpaca API instance (optional, but recommended)
+        risk_mgr: RiskManager instance for logging (optional)
     
     Returns:
-        DataFrame with OHLCV data
+        DataFrame with OHLCV data (Open, High, Low, Close, Volume)
     """
     global massive_client
     
-    # Map symbol for Massive API (SPX uses different format)
-    massive_symbol_map = {
-        'SPY': 'SPY',
-        'QQQ': 'QQQ',
-        'SPX': 'SPX',  # Polygon uses SPX (not ^SPX)
-        '^SPX': 'SPX'
-    }
-    massive_symbol = massive_symbol_map.get(symbol, symbol.replace('^', ''))
+    # Helper function to log data collection
+    def log_data_source(source: str, bars: int, symbol: str):
+        if risk_mgr and hasattr(risk_mgr, 'log'):
+            risk_mgr.log(f"📊 {symbol} Data: {bars} bars from {source} | period={period}, interval={interval}", "INFO")
     
-    # Try Massive API first
-    if massive_client:
+    # ========== PRIORITY 1: ALPACA API (You're paying for this!) ==========
+    if api:
+        # Log API availability for debugging
+        if risk_mgr and hasattr(risk_mgr, 'log'):
+            risk_mgr.log(f"🔍 Alpaca API available for {symbol}, attempting data fetch...", "INFO")
         try:
-            # Calculate date range
+            from alpaca_trade_api.rest import TimeFrame
+            from datetime import datetime, timedelta
+            
+            # Calculate date range - get full 2 days including today
+            # For 2 days: get data from 2 days ago to today (inclusive)
             if period == "2d":
                 days = 2
             elif period == "1d":
@@ -1004,26 +1041,191 @@ def get_market_data(symbol: str, period: str = "2d", interval: str = "1m") -> pd
             else:
                 days = 2  # Default
             
-            end_date = datetime.now().strftime("%Y-%m-%d")
-            start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+            # Use current time as end, go back (days) days for start
+            # This ensures we get the most recent data including today
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=days)
             
-            hist = massive_client.get_historical_data(massive_symbol, start_date, end_date, interval=interval)
-            if len(hist) > 0:
-                # Massive API returns lowercase columns, normalize to match yfinance format (capitalized)
-                if 'close' in hist.columns:
-                    hist = hist.rename(columns={
-                        'open': 'Open',
-                        'high': 'High',
-                        'low': 'Low',
-                        'close': 'Close',
-                        'volume': 'Volume'
-                    })
-                return hist.tail(50 if interval == '1m' else len(hist))
+            # For better data coverage, extend start date slightly to ensure we get full 2 days
+            # Alpaca might filter to market hours, so we request a bit more to be safe
+            if period == "2d":
+                start_date = start_date - timedelta(hours=12)  # Go back 12 hours more to ensure full coverage
+            
+            # Map interval to Alpaca TimeFrame
+            if interval == "1m":
+                timeframe = TimeFrame.Minute
+            elif interval == "5m":
+                timeframe = TimeFrame(5, TimeFrame.Minute)
+            elif interval == "15m":
+                timeframe = TimeFrame(15, TimeFrame.Minute)
+            elif interval == "1d":
+                timeframe = TimeFrame.Day
+            else:
+                timeframe = TimeFrame.Minute  # Default to 1 minute
+            
+            # Get bars from Alpaca (limit 5000 bars per request)
+            # For 2 days of 1-minute data: 2 * 1440 = 2880 bars (well within limit)
+            # Alpaca API v2: Use date strings in YYYY-MM-DD format (most reliable)
+            start_str = start_date.strftime("%Y-%m-%d")
+            end_str = end_date.strftime("%Y-%m-%d")
+            
+            # Log attempt for debugging
+            if risk_mgr and hasattr(risk_mgr, 'log'):
+                risk_mgr.log(f"🔍 Attempting Alpaca API fetch for {symbol}: {start_str} to {end_str}, timeframe={timeframe}", "INFO")
+            
+            # Alpaca API v2 get_bars signature:
+            # get_bars(symbol, timeframe, start, end, limit=None, adjustment=None)
+            bars = api.get_bars(
+                symbol,
+                timeframe,
+                start_str,
+                end_str,
+                limit=5000,
+                adjustment='raw'  # Raw prices, not adjusted
+            ).df
+            
+            if len(bars) > 0:
+                # Alpaca returns: open, high, low, close, volume (lowercase)
+                # Rename to match expected format (capitalized)
+                # Handle both single column names and MultiIndex
+                if isinstance(bars.columns, pd.MultiIndex):
+                    bars.columns = bars.columns.get_level_values(0)
+                
+                # Ensure we have the right column names
+                column_map = {
+                    'open': 'Open', 'high': 'High', 'low': 'Low', 
+                    'close': 'Close', 'volume': 'Volume'
+                }
+                bars = bars.rename(columns=column_map)
+                
+                # Ensure we have required columns
+                required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+                if not all(col in bars.columns for col in required_cols):
+                    # Try to infer from existing columns
+                    for req_col in required_cols:
+                        if req_col not in bars.columns:
+                            lower_col = req_col.lower()
+                            if lower_col in bars.columns:
+                                bars = bars.rename(columns={lower_col: req_col})
+                
+                # Check if Alpaca returned sufficient data for 2 days
+                # Expected: ~2,880 bars for full 2 days (1,440 min/day × 2)
+                # Alpaca often returns only market hours (~1,800 bars)
+                # If insufficient, try Massive API which has 1-minute granular package
+                bars_count = len(bars)
+                expected_min_bars = 2000 if period == "2d" else 1000  # Minimum threshold
+                
+                if bars_count < expected_min_bars and period == "2d":
+                    if risk_mgr and hasattr(risk_mgr, 'log'):
+                        risk_mgr.log(f"⚠️ Alpaca API returned only {bars_count} bars for 2 days (expected ~2,880). Trying Massive API for complete data...", "WARNING")
+                    # Don't return yet - try Massive API for better data
+                else:
+                    # Alpaca data is sufficient, return it
+                    log_data_source("Alpaca API", bars_count, symbol)
+                    return bars
+            else:
+                if risk_mgr and hasattr(risk_mgr, 'log'):
+                    risk_mgr.log(f"⚠️ Alpaca API returned empty data for {symbol}, trying Massive/yfinance", "WARNING")
         except Exception as e:
-            # Fallback to yfinance
+            # Fallback to Massive/yfinance
+            if risk_mgr and hasattr(risk_mgr, 'log'):
+                risk_mgr.log(f"⚠️ Alpaca data fetch failed for {symbol}: {str(e)} (type: {type(e).__name__}), trying Massive/yfinance", "WARNING")
+                import traceback
+                risk_mgr.log(f"   Traceback: {traceback.format_exc()[:200]}", "WARNING")
             pass
     
-    # Fallback to yfinance
+    # ========== PRIORITY 2: MASSIVE API (You have 1-minute granular package!) ==========
+    # Map symbol for Massive API (SPX uses different format)
+    massive_symbol_map = {
+        'SPY': 'SPY',
+        'QQQ': 'QQQ',
+        'SPX': 'SPX',  # Polygon uses SPX (not ^SPX)
+        '^SPX': 'SPX'
+    }
+    massive_symbol = massive_symbol_map.get(symbol, symbol.replace('^', ''))
+    
+    if massive_client:
+        try:
+            # Calculate date range - get full 2 days including today
+            if period == "2d":
+                days = 2
+            elif period == "1d":
+                days = 1
+            elif period == "5d":
+                days = 5
+            else:
+                days = 2  # Default
+            
+            # Massive API needs date strings in YYYY-MM-DD format
+            # Get data from (days) days ago to today (inclusive)
+            end_date_str = datetime.now().strftime("%Y-%m-%d")
+            start_date_str = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+            
+            # Log attempt for debugging
+            if risk_mgr and hasattr(risk_mgr, 'log'):
+                risk_mgr.log(f"🔍 Attempting Massive API fetch for {symbol}: {start_date_str} to {end_date_str}, interval={interval}", "INFO")
+            
+            # Massive API get_historical_data signature:
+            # get_historical_data(symbol, start_date, end_date, interval='1min')
+            hist = massive_client.get_historical_data(
+                massive_symbol, 
+                start_date_str, 
+                end_date_str, 
+                interval=interval
+            )
+            
+            if len(hist) > 0:
+                # Massive API returns lowercase columns, normalize to match expected format (capitalized)
+                if 'close' in hist.columns or 'Close' in hist.columns:
+                    # Handle both lowercase and capitalized columns
+                    column_map = {}
+                    for col in hist.columns:
+                        if col.lower() == 'open':
+                            column_map[col] = 'Open'
+                        elif col.lower() == 'high':
+                            column_map[col] = 'High'
+                        elif col.lower() == 'low':
+                            column_map[col] = 'Low'
+                        elif col.lower() == 'close':
+                            column_map[col] = 'Close'
+                        elif col.lower() == 'volume':
+                            column_map[col] = 'Volume'
+                    
+                    if column_map:
+                        hist = hist.rename(columns=column_map)
+                
+                # Ensure index is datetime if it's not already
+                if not isinstance(hist.index, pd.DatetimeIndex):
+                    try:
+                        hist.index = pd.to_datetime(hist.index)
+                    except:
+                        pass
+                
+                # CRITICAL FIX: Return ALL data, not just last 50 bars!
+                # Massive API with 1-minute granular package should return full 2 days
+                hist_count = len(hist)
+                log_data_source("Massive API", hist_count, symbol)
+                
+                # Compare with Alpaca data if we have it
+                if risk_mgr and hasattr(risk_mgr, 'log'):
+                    if hist_count < 2000 and period == "2d":
+                        risk_mgr.log(f"⚠️ Massive API returned {hist_count} bars for 2 days (expected ~2,880). May be market hours only.", "WARNING")
+                    elif hist_count >= 2000:
+                        risk_mgr.log(f"✅ Massive API returned {hist_count} bars - using complete dataset for {symbol}", "INFO")
+                
+                return hist
+            else:
+                if risk_mgr and hasattr(risk_mgr, 'log'):
+                    risk_mgr.log(f"⚠️ Massive API returned empty data for {symbol}, trying yfinance", "WARNING")
+        except Exception as e:
+            # Fallback to yfinance
+            if risk_mgr and hasattr(risk_mgr, 'log'):
+                risk_mgr.log(f"⚠️ Massive API fetch failed for {symbol}: {str(e)} (type: {type(e).__name__}), trying yfinance", "WARNING")
+                import traceback
+                risk_mgr.log(f"   Traceback: {traceback.format_exc()[:200]}", "WARNING")
+            pass
+    
+    # ========== PRIORITY 3: YFINANCE (Last Resort) ==========
     try:
         # Map symbol for yfinance (SPX needs ^ prefix)
         yf_symbol = symbol
@@ -1036,9 +1238,18 @@ def get_market_data(symbol: str, period: str = "2d", interval: str = "1m") -> pd
         if isinstance(hist.columns, pd.MultiIndex):
             hist.columns = hist.columns.get_level_values(0)
         hist = hist.dropna()
-        return hist.tail(50 if interval == '1m' else len(hist))
+        
+        # CRITICAL FIX: Return ALL data, not just last 50 bars!
+        # Note: yfinance may have limitations, but return what we get
+        if len(hist) > 0:
+            log_data_source("yfinance", len(hist), symbol)
+            return hist
     except Exception as e:
+        if risk_mgr and hasattr(risk_mgr, 'log'):
+            risk_mgr.log(f"❌ All data sources failed for {symbol}: {e}", "ERROR")
         return pd.DataFrame()
+    
+    return pd.DataFrame()
 
 def get_current_price(symbol: str) -> Optional[float]:
     """
@@ -1149,25 +1360,35 @@ def find_atm_strike(price: float) -> float:
     return round(price)
 
 def estimate_premium(price: float, strike: float, option_type: str) -> float:
-    """Estimate option premium using Black-Scholes"""
-    from scipy.stats import norm
-    
-    T = config.T if hasattr(config, 'T') else 1/365
-    r = config.R if hasattr(config, 'R') else 0.04
-    sigma = config.DEFAULT_SIGMA if hasattr(config, 'DEFAULT_SIGMA') else 0.20
-    
-    if T <= 0:
-        return max(0.01, abs(price - strike))
-    
-    d1 = (np.log(price / strike) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
-    d2 = d1 - sigma * np.sqrt(T)
-    
-    if option_type == 'call':
-        premium = price * norm.cdf(d1) - strike * np.exp(-r * T) * norm.cdf(d2)
-    else:  # put
-        premium = strike * np.exp(-r * T) * norm.cdf(-d2) - price * norm.cdf(-d1)
-    
-    return max(0.01, premium)
+    """Estimate option premium using Black-Scholes with fallback"""
+    # Try to use scipy for accurate Black-Scholes
+    try:
+        from scipy.stats import norm
+        
+        T = config.T if hasattr(config, 'T') else 1/365
+        r = config.R if hasattr(config, 'R') else 0.04
+        sigma = config.DEFAULT_SIGMA if hasattr(config, 'DEFAULT_SIGMA') else 0.20
+        
+        if T <= 0:
+            return max(0.01, abs(price - strike))
+        
+        d1 = (np.log(price / strike) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
+        d2 = d1 - sigma * np.sqrt(T)
+        
+        if option_type == 'call':
+            premium = price * norm.cdf(d1) - strike * np.exp(-r * T) * norm.cdf(d2)
+        else:  # put
+            premium = strike * np.exp(-r * T) * norm.cdf(-d2) - price * norm.cdf(-d1)
+        
+        return max(0.01, premium)
+    except (ImportError, ModuleNotFoundError, AttributeError):
+        # Fallback: Simple intrinsic + time value estimation (no scipy required)
+        # This is less accurate but allows trading to continue
+        intrinsic = max(0, price - strike) if option_type == 'call' else max(0, strike - price)
+        # Add time value: roughly 1-2% of underlying for 0DTE
+        time_value = price * 0.015  # 1.5% time value for 0DTE
+        premium = intrinsic + time_value
+        return max(0.01, premium)
 
 def extract_underlying_from_option(option_symbol: str) -> str:
     """Extract underlying symbol from option symbol (SPY251205C00685000 -> SPY)"""
@@ -1379,6 +1600,24 @@ def check_stop_losses(api: tradeapi.REST, risk_mgr: RiskManager, symbol_prices: 
             if alpaca_plpc is not None and alpaca_plpc <= -0.15:
                 underlying = extract_underlying_from_option(symbol)
                 risk_mgr.log(f"🚨 STEP 1 STOP-LOSS (ALPACA PnL): {symbol} @ {alpaca_plpc:.2%} → FORCING IMMEDIATE CLOSE", "CRITICAL")
+                
+                # Send Telegram exit alert for stop-loss
+                if TELEGRAM_AVAILABLE:
+                    try:
+                        pos_data = risk_mgr.open_positions.get(symbol, {})
+                        entry_price = pos_data.get('entry_premium', 0)
+                        exit_price = entry_price * (1 + alpaca_plpc) if entry_price > 0 else 0
+                        send_exit_alert(
+                            symbol=symbol,
+                            exit_reason=f"Stop Loss ({alpaca_plpc:.1%})",
+                            entry_price=entry_price,
+                            exit_price=exit_price,
+                            pnl_pct=alpaca_plpc,
+                            qty=pos_data.get('contracts', 1)
+                        )
+                    except Exception:
+                        pass  # Never block trading
+                
                 # Record stop-loss trigger for cooldown (prevent immediate re-entry)
                 risk_mgr.symbol_stop_loss_cooldown[underlying] = datetime.now()
                 positions_to_close.append(symbol)
@@ -1391,6 +1630,21 @@ def check_stop_losses(api: tradeapi.REST, risk_mgr: RiskManager, symbol_prices: 
                 if bid_pnl_pct <= -0.15:
                     underlying = extract_underlying_from_option(symbol)
                     risk_mgr.log(f"🚨 STEP 2 STOP-LOSS (BID PRICE): {symbol} @ {bid_pnl_pct:.2%} (Entry: ${entry_premium:.4f}, Bid: ${bid_premium:.4f}) → FORCED FULL EXIT", "CRITICAL")
+                    
+                    # Send Telegram exit alert for stop-loss
+                    if TELEGRAM_AVAILABLE:
+                        try:
+                            send_exit_alert(
+                                symbol=symbol,
+                                exit_reason=f"Stop Loss ({bid_pnl_pct:.1%})",
+                                entry_price=entry_premium,
+                                exit_price=bid_premium,
+                                pnl_pct=bid_pnl_pct,
+                                qty=pos_data.get('contracts', 1)
+                            )
+                        except Exception:
+                            pass  # Never block trading
+                    
                     # Record stop-loss trigger for cooldown (prevent immediate re-entry)
                     risk_mgr.symbol_stop_loss_cooldown[underlying] = datetime.now()
                     positions_to_close.append(symbol)
@@ -1539,6 +1793,22 @@ def check_stop_losses(api: tradeapi.REST, risk_mgr: RiskManager, symbol_prices: 
                     try:
                         api.close_position(symbol)
                         risk_mgr.log(f"🎯 TP1 +{tp1_level:.0%} ({current_regime.upper()}) [Dynamic] → FULL EXIT: {symbol} @ {pnl_pct:.1%}", "TRADE")
+                        
+                        # Send Telegram exit alert for take-profit
+                        if TELEGRAM_AVAILABLE:
+                            try:
+                                exit_price = entry_premium * (1 + pnl_pct) if entry_premium > 0 else 0
+                                send_exit_alert(
+                                    symbol=symbol,
+                                    exit_reason=f"Take Profit 1 (+{tp1_level:.0%})",
+                                    entry_price=entry_premium,
+                                    exit_price=exit_price,
+                                    pnl_pct=pnl_pct,
+                                    qty=pos_data.get('contracts', 1)
+                                )
+                            except Exception:
+                                pass  # Never block trading
+                        
                         positions_to_close.append(symbol)
                         continue
                     except Exception as e:
@@ -1603,6 +1873,22 @@ def check_stop_losses(api: tradeapi.REST, risk_mgr: RiskManager, symbol_prices: 
                     try:
                         api.close_position(symbol)
                         risk_mgr.log(f"🎯 TP2 +{tp2_level:.0%} ({current_regime.upper()}) [Dynamic] → FULL EXIT: {symbol} @ {pnl_pct:.1%}", "TRADE")
+                        
+                        # Send Telegram exit alert for take-profit
+                        if TELEGRAM_AVAILABLE:
+                            try:
+                                exit_price = entry_premium * (1 + pnl_pct) if entry_premium > 0 else 0
+                                send_exit_alert(
+                                    symbol=symbol,
+                                    exit_reason=f"Take Profit 2 (+{tp2_level:.0%})",
+                                    entry_price=entry_premium,
+                                    exit_price=exit_price,
+                                    pnl_pct=pnl_pct,
+                                    qty=pos_data.get('contracts', 1)
+                                )
+                            except Exception:
+                                pass  # Never block trading
+                        
                         positions_to_close.append(symbol)
                         continue
                     except Exception as e:
@@ -1618,6 +1904,22 @@ def check_stop_losses(api: tradeapi.REST, risk_mgr: RiskManager, symbol_prices: 
                         api.close_position(symbol)
                         pos_data['tp3_hit'] = True  # RL reward signal: TP3 hit (high reward)
                         risk_mgr.log(f"🎯 TP3 +{tp3_level:.0%} HIT ({current_regime.upper()}) [Dynamic: {tp3_level:.0%} vs Base: {tp_params['tp3']:.0%}] → FULL EXIT: {symbol} @ {pnl_pct:.1%}", "TRADE")
+                        
+                        # Send Telegram exit alert for take-profit
+                        if TELEGRAM_AVAILABLE:
+                            try:
+                                exit_price = entry_premium * (1 + pnl_pct) if entry_premium > 0 else 0
+                                send_exit_alert(
+                                    symbol=symbol,
+                                    exit_reason=f"Take Profit 3 (+{tp3_level:.0%})",
+                                    entry_price=entry_premium,
+                                    exit_price=exit_price,
+                                    pnl_pct=pnl_pct,
+                                    qty=pos_data.get('contracts', 1)
+                                )
+                            except Exception:
+                                pass  # Never block trading
+                        
                         positions_to_close.append(symbol)
                         continue
                     except Exception as e:
@@ -1992,6 +2294,39 @@ def check_stop_losses(api: tradeapi.REST, risk_mgr: RiskManager, symbol_prices: 
                         time_in_force='day'
                     )
                     risk_mgr.log(f"✓ Closed via sell order: {symbol}", "TRADE")
+                    
+                    # Send Telegram exit alert
+                    if TELEGRAM_AVAILABLE and symbol in risk_mgr.open_positions:
+                        try:
+                            pos_data = risk_mgr.open_positions[symbol]
+                            entry_price = pos_data.get('entry_premium', 0)
+                            # Try to get exit price from position or estimate
+                            exit_price = 0
+                            try:
+                                pos = api.get_position(symbol)
+                                if pos and hasattr(pos, 'market_value') and hasattr(pos, 'qty'):
+                                    qty_float = float(pos.qty) if pos.qty else 1
+                                    if qty_float > 0:
+                                        exit_price = abs(float(pos.market_value)) / (qty_float * 100)
+                            except:
+                                pass
+                            
+                            # Calculate PnL
+                            if entry_price > 0:
+                                pnl_pct = ((exit_price - entry_price) / entry_price) if exit_price > 0 else 0
+                                pnl_dollar = (exit_price - entry_price) * pos_data.get('contracts', 1) * 100 if exit_price > 0 else 0
+                                send_exit_alert(
+                                    symbol=symbol,
+                                    exit_reason="Manual Close",
+                                    entry_price=entry_price,
+                                    exit_price=exit_price if exit_price > 0 else entry_price,
+                                    pnl_pct=pnl_pct,
+                                    qty=pos_data.get('contracts', 1),
+                                    pnl_dollar=pnl_dollar
+                                )
+                        except Exception:
+                            pass  # Never block trading
+                    
                     if symbol in risk_mgr.open_positions:
                         del risk_mgr.open_positions[symbol]
             except Exception as e2:
@@ -2467,8 +2802,8 @@ def run_safe_live_trading():
                     time.sleep(30)
                     continue
                 
-                # Get latest SPY data (Massive API first, yfinance fallback)
-                hist = get_market_data("SPY", period="2d", interval="1m")
+                # Get latest SPY data (Alpaca first, then Massive, then yfinance)
+                hist = get_market_data("SPY", period="2d", interval="1m", api=api, risk_mgr=risk_mgr)
                 
                 if len(hist) < LOOKBACK:
                     risk_mgr.log("Waiting for more data...", "INFO")
@@ -2506,8 +2841,8 @@ def run_safe_live_trading():
                 # Run RL inference for each available symbol
                 for sym in available_symbols:
                     try:
-                        # Get symbol-specific market data
-                        sym_hist = get_market_data(sym, period="2d", interval="1m")
+                        # Get symbol-specific market data (Alpaca first, then Massive, then yfinance)
+                        sym_hist = get_market_data(sym, period="2d", interval="1m", api=api, risk_mgr=risk_mgr)
                         
                         if len(sym_hist) < LOOKBACK:
                             risk_mgr.log(f"⚠️ {sym}: Insufficient data ({len(sym_hist)} < {LOOKBACK} bars), skipping RL inference", "WARNING")
@@ -2630,7 +2965,14 @@ def run_safe_live_trading():
                                     
                                     # Get ensemble signal
                                     vix_value = risk_mgr.get_current_vix() if risk_mgr else 20.0
-                                    current_price_val = closes[-1] if 'close' in ensemble_data.columns else ensemble_data['Close'].iloc[-1]
+                                    # Fix: Use ensemble_data directly, not undefined 'closes' variable
+                                    if 'close' in ensemble_data.columns:
+                                        current_price_val = ensemble_data['close'].iloc[-1]
+                                    elif 'Close' in ensemble_data.columns:
+                                        current_price_val = ensemble_data['Close'].iloc[-1]
+                                    else:
+                                        # Fallback: use current_price from outer scope
+                                        current_price_val = current_price
                                     strike_val = round(current_price_val)
                                     
                                     # Get portfolio delta if available
@@ -2947,9 +3289,15 @@ def run_safe_live_trading():
                         risk_mgr.log(f"⛔ BLOCKED: No eligible symbols for BUY CALL | Signals: {buy_call_symbols} | Open Positions: {list(risk_mgr.open_positions.keys())}", "INFO")
                         # Fall through to next iteration
                     else:
+                        # Check minimum confidence threshold before executing
+                        selected_strength = symbol_actions.get(current_symbol, (None, None, 0.0))[2] if current_symbol in symbol_actions else 0.0
+                        if selected_strength < MIN_ACTION_STRENGTH_THRESHOLD:
+                            risk_mgr.log(f"⛔ BLOCKED: Selected symbol {current_symbol} confidence too low (strength={selected_strength:.3f} < {MIN_ACTION_STRENGTH_THRESHOLD:.3f}) | Skipping trade", "INFO")
+                            time.sleep(10)
+                            continue
                         # current_symbol already validated and selected by choose_best_symbol_for_trade
                         buy_call_symbols = [sym for sym, (act, _, _) in symbol_actions.items() if act == 1]
-                        risk_mgr.log(f"🎯 SYMBOL SELECTION: {current_symbol} selected for BUY CALL | All CALL signals: {buy_call_symbols}", "INFO")
+                        risk_mgr.log(f"🎯 SYMBOL SELECTION: {current_symbol} selected for BUY CALL (strength={selected_strength:.3f}) | All CALL signals: {buy_call_symbols}", "INFO")
                     
                     # Skip if no symbol selected
                     if current_symbol is None:
@@ -2981,7 +3329,7 @@ def run_safe_live_trading():
                     
                     # Get symbol-specific historical data for dynamic TP calculation
                     try:
-                        symbol_hist = get_market_data(current_symbol, period="2d", interval="1m")
+                        symbol_hist = get_market_data(current_symbol, period="2d", interval="1m", api=api, risk_mgr=risk_mgr)
                         if len(symbol_hist) >= 20:
                             # Get RL action raw value for confidence (from symbol_actions)
                             rl_action_raw = None
@@ -3066,6 +3414,14 @@ def run_safe_live_trading():
                         current_vix = risk_mgr.get_current_vix()
                         current_regime = risk_mgr.get_vol_regime(current_vix)
                         risk_mgr.log(f"⛔ BLOCKED: {current_symbol} ({symbol}) | Reason: {reason} | Symbol: {current_symbol} | Qty: {qty} | Premium: ${estimated_premium:.4f} | Regime: {current_regime.upper()} | VIX: {current_vix:.1f} | Positions: {len(risk_mgr.open_positions)}/{MAX_CONCURRENT} | Time: {datetime.now().strftime('%H:%M:%S')} EST", "WARNING")
+                        
+                        # Send Telegram block alert (only for significant blocks, not cooldowns)
+                        if TELEGRAM_AVAILABLE and not any(x in reason.lower() for x in ['cooldown', 'duplicate']):
+                            try:
+                                send_block_alert(symbol=current_symbol, block_reason=reason)
+                            except Exception:
+                                pass  # Never block trading
+                        
                         time.sleep(30)
                         continue
                     
@@ -3121,6 +3477,32 @@ def run_safe_live_trading():
                         risk_mgr.log(f"✅ TRADE_OPENED | symbol={current_symbol} | option={symbol} | symbol_price=${symbol_price:.2f} | entry_price=${symbol_price:.2f} | premium=${entry_premium:.4f} | qty={qty} | strike=${strike:.2f} | regime={entry_regime.upper()}", "TRADE")
                         risk_mgr.log(f"✅ NEW ENTRY: {qty}x {symbol} @ ${entry_premium:.2f} premium (Strike: ${strike:.2f}, Underlying: ${symbol_price:.2f})", "TRADE")
                         
+                        # Send Telegram entry alert
+                        if TELEGRAM_AVAILABLE:
+                            try:
+                                # Extract expiry from symbol (0DTE format)
+                                expiry = "0DTE" if len(symbol) > 10 else "Unknown"
+                                # Get confidence from action_strength if available
+                                confidence = symbol_actions.get(current_symbol, (None, None, None))[2] if current_symbol in symbol_actions else None
+                                action_source_val = symbol_actions.get(current_symbol, (None, None, None))[1] if current_symbol in symbol_actions else None
+                                alert_sent = send_entry_alert(
+                                    symbol=symbol,
+                                    side="CALL",
+                                    strike=strike,
+                                    expiry=expiry,
+                                    fill_price=entry_premium,
+                                    qty=qty,
+                                    confidence=confidence,
+                                    action_source=action_source_val
+                                )
+                                if alert_sent:
+                                    risk_mgr.log(f"📱 Telegram entry alert sent for {symbol}", "INFO")
+                                else:
+                                    risk_mgr.log(f"⚠️ Telegram entry alert not sent (rate limited or error) for {symbol}", "WARNING")
+                            except Exception as e:
+                                risk_mgr.log(f"❌ Telegram entry alert error: {e}", "ERROR")
+                                pass  # Never block trading
+                        
                         risk_mgr.record_order(symbol)
                         
                         # Save trade to database
@@ -3164,9 +3546,15 @@ def run_safe_live_trading():
                         risk_mgr.log(f"⛔ BLOCKED: No eligible symbols for BUY PUT | Signals: {buy_put_symbols} | Open Positions: {list(risk_mgr.open_positions.keys())}", "INFO")
                         # Fall through to next iteration
                     else:
+                        # Check minimum confidence threshold before executing
+                        selected_strength = symbol_actions.get(current_symbol, (None, None, 0.0))[2] if current_symbol in symbol_actions else 0.0
+                        if selected_strength < MIN_ACTION_STRENGTH_THRESHOLD:
+                            risk_mgr.log(f"⛔ BLOCKED: Selected symbol {current_symbol} confidence too low (strength={selected_strength:.3f} < {MIN_ACTION_STRENGTH_THRESHOLD:.3f}) | Skipping trade", "INFO")
+                            time.sleep(10)
+                            continue
                         # current_symbol already validated and selected by choose_best_symbol_for_trade
                         buy_put_symbols = [sym for sym, (act, _, _) in symbol_actions.items() if act == 2]
-                        risk_mgr.log(f"🎯 SYMBOL SELECTION: {current_symbol} selected for BUY PUT | All PUT signals: {buy_put_symbols}", "INFO")
+                        risk_mgr.log(f"🎯 SYMBOL SELECTION: {current_symbol} selected for BUY PUT (strength={selected_strength:.3f}) | All PUT signals: {buy_put_symbols}", "INFO")
                     
                     # Skip if no symbol selected
                     if current_symbol is None:
@@ -3206,7 +3594,7 @@ def run_safe_live_trading():
                     
                     # Get symbol-specific historical data for dynamic TP calculation
                     try:
-                        symbol_hist = get_market_data(current_symbol, period="2d", interval="1m")
+                        symbol_hist = get_market_data(current_symbol, period="2d", interval="1m", api=api, risk_mgr=risk_mgr)
                         if len(symbol_hist) >= 20:
                             # Get RL action raw value for confidence (from symbol_actions)
                             rl_action_raw = None
@@ -3291,6 +3679,14 @@ def run_safe_live_trading():
                         current_vix = risk_mgr.get_current_vix()
                         current_regime = risk_mgr.get_vol_regime(current_vix)
                         risk_mgr.log(f"⛔ BLOCKED: {current_symbol} ({symbol}) | Reason: {reason} | Symbol: {current_symbol} | Qty: {qty} | Premium: ${estimated_premium:.4f} | Regime: {current_regime.upper()} | VIX: {current_vix:.1f} | Positions: {len(risk_mgr.open_positions)}/{MAX_CONCURRENT} | Time: {datetime.now().strftime('%H:%M:%S')} EST", "WARNING")
+                        
+                        # Send Telegram block alert (only for significant blocks, not cooldowns)
+                        if TELEGRAM_AVAILABLE and not any(x in reason.lower() for x in ['cooldown', 'duplicate']):
+                            try:
+                                send_block_alert(symbol=current_symbol, block_reason=reason)
+                            except Exception:
+                                pass  # Never block trading
+                        
                         time.sleep(30)
                         continue
                     
@@ -3341,6 +3737,38 @@ def run_safe_live_trading():
                             'vol_regime': entry_regime,  # Store regime at entry
                             'entry_vix': entry_vix
                         }
+                        
+                        # Enhanced logging for validation
+                        risk_mgr.log(f"✅ TRADE_OPENED | symbol={current_symbol} | option={symbol} | symbol_price=${symbol_price:.2f} | entry_price=${symbol_price:.2f} | premium=${entry_premium:.4f} | qty={qty} | strike=${strike:.2f} | regime={entry_regime.upper()}", "TRADE")
+                        risk_mgr.log(f"✅ NEW ENTRY: {qty}x {symbol} @ ${entry_premium:.2f} premium (Strike: ${strike:.2f}, Underlying: ${symbol_price:.2f})", "TRADE")
+                        
+                        # Send Telegram entry alert for PUT
+                        if TELEGRAM_AVAILABLE:
+                            try:
+                                # Extract expiry from symbol (0DTE format)
+                                expiry = "0DTE" if len(symbol) > 10 else "Unknown"
+                                # Get confidence from action_strength if available
+                                confidence = symbol_actions.get(current_symbol, (None, None, None))[2] if current_symbol in symbol_actions else None
+                                action_source_val = symbol_actions.get(current_symbol, (None, None, None))[1] if current_symbol in symbol_actions else None
+                                alert_sent = send_entry_alert(
+                                    symbol=symbol,
+                                    side="PUT",
+                                    strike=strike,
+                                    expiry=expiry,
+                                    fill_price=entry_premium,
+                                    qty=qty,
+                                    confidence=confidence,
+                                    action_source=action_source_val
+                                )
+                                if alert_sent:
+                                    risk_mgr.log(f"📱 Telegram entry alert sent for {symbol}", "INFO")
+                                else:
+                                    risk_mgr.log(f"⚠️ Telegram entry alert not sent (rate limited or error) for {symbol}", "WARNING")
+                            except Exception as e:
+                                risk_mgr.log(f"❌ Telegram entry alert error: {e}", "ERROR")
+                                pass  # Never block trading
+                        
+                        risk_mgr.record_order(symbol)
                         # Get timestamps from Alpaca order response
                         submitted_at = order.submitted_at if hasattr(order, 'submitted_at') and order.submitted_at else ''
                         filled_at = order.filled_at if hasattr(order, 'filled_at') and order.filled_at else ''
@@ -3458,6 +3886,14 @@ def run_safe_live_trading():
                 
             except Exception as e:
                 risk_mgr.log(f"Error in main loop: {e}", "ERROR")
+                
+                # Send Telegram error alert
+                if TELEGRAM_AVAILABLE:
+                    try:
+                        send_error_alert(str(e), context="Main trading loop")
+                    except Exception:
+                        pass  # Never block trading
+                
                 import traceback
                 traceback.print_exc()
                 time.sleep(10)

@@ -595,12 +595,57 @@ def render_trades():
                         time.sleep(1)
                         st.rerun()
 
+        # Daily P&L Summary Section
+        st.markdown("### 📊 Daily P&L Summary")
+        if TRADE_DB_AVAILABLE:
+            try:
+                trade_db = TradeDatabase()
+                daily_pnl = trade_db.get_daily_pnl_summary(filter_0dte=False)
+                
+                if not daily_pnl.empty:
+                    # Format the daily summary for display
+                    daily_display = daily_pnl.copy()
+                    daily_display.columns = ['Date', 'Trades', 'Total P&L ($)', 'Wins', 'Losses', 'Total Wins ($)', 'Total Losses ($)', 'Win Rate (%)']
+                    daily_display['Total P&L ($)'] = daily_display['Total P&L ($)'].apply(lambda x: f"${x:,.2f}")
+                    daily_display['Total Wins ($)'] = daily_display['Total Wins ($)'].apply(lambda x: f"${x:,.2f}")
+                    daily_display['Total Losses ($)'] = daily_display['Total Losses ($)'].apply(lambda x: f"${x:,.2f}")
+                    daily_display['Win Rate (%)'] = daily_display['Win Rate (%)'].apply(lambda x: f"{x:.1f}%")
+                    
+                    st.dataframe(daily_display, use_container_width=True, hide_index=True)
+                    
+                    # Summary stats
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("Total Days", len(daily_pnl))
+                    with col2:
+                        st.metric("Total P&L", f"${daily_pnl['total_pnl'].sum():,.2f}")
+                    with col3:
+                        st.metric("Best Day", f"${daily_pnl['total_pnl'].max():,.2f}")
+                    with col4:
+                        st.metric("Worst Day", f"${daily_pnl['total_pnl'].min():,.2f}")
+                else:
+                    st.info("No daily P&L data available yet. Trades will appear here once executed.")
+            except Exception as e:
+                st.error(f"Error loading daily P&L: {e}")
+                import traceback
+                st.code(traceback.format_exc())
+        
+        st.markdown("---")
+        st.markdown("### 📋 Detailed Trade History")
+        
         # Filters
         col1, col2, col3 = st.columns(3)
         with col1:
             symbol_filter = st.multiselect("Symbol", ["SPY", "QQQ", "SPX"], default=[])
         with col2:
-            date_range = st.date_input("Date Range", [])
+            # Date range picker
+            today = datetime.now().date()
+            week_ago = today - timedelta(days=7)
+            date_range = st.date_input(
+                "Date Range",
+                value=(week_ago, today),
+                key="trade_date_range"
+            )
         with col3:
             status_filter = st.selectbox("Status", ["All", "Open", "Closed"])
         
@@ -610,12 +655,22 @@ def render_trades():
         if not trades_df.empty:
             st.dataframe(trades_df, use_container_width=True, hide_index=True)
             
+            # Export button
+            if st.button("📥 Export to CSV"):
+                csv = trades_df.to_csv(index=False)
+                st.download_button(
+                    label="Download CSV",
+                    data=csv,
+                    file_name=f"trades_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv"
+                )
+            
             # Trade details
             if st.checkbox("Show Trade Details"):
                 selected_trade = st.selectbox("Select Trade", trades_df.index)
                 show_trade_details(selected_trade)
         else:
-            st.info("No trades found")
+            st.info("No trades found. Trades will appear here once the agent executes them.")
     
     with tab2:
         render_backtesting()
@@ -922,18 +977,44 @@ def get_performance_stats(period):
     }
 
 def get_trades_data(symbol_filter, date_range, status_filter):
-    """Get trades data from database or Alpaca"""
+    """Get trades data from database or Alpaca with proper date filtering"""
     if TRADE_DB_AVAILABLE:
         try:
             trade_db = TradeDatabase()
-            all_trades = trade_db.get_all_trades()
             
-            if not all_trades:
+            # Handle date range filtering
+            start_date = None
+            end_date = None
+            if date_range and isinstance(date_range, tuple) and len(date_range) == 2:
+                if date_range[0]:
+                    start_date = date_range[0].strftime('%Y-%m-%d')
+                if date_range[1]:
+                    end_date = date_range[1].strftime('%Y-%m-%d')
+            
+            # Get trades from database with date filtering
+            if start_date or end_date:
+                trades_df = trade_db.get_trades_by_date_range(start_date=start_date, end_date=end_date, filter_0dte=False)
+            else:
+                all_trades = trade_db.get_all_trades()
+                if not all_trades:
+                    return pd.DataFrame()
+                trades_df = pd.DataFrame(all_trades)
+            
+            if trades_df.empty:
                 return pd.DataFrame()
             
-            # Convert to DataFrame
+            # Convert to display format
             trades_list = []
-            for trade in all_trades:
+            for _, trade in trades_df.iterrows():
+                # Apply symbol filter
+                if symbol_filter != "All":
+                    underlying = trade.get('underlying', '')
+                    if underlying != symbol_filter:
+                        continue
+                
+                # Apply status filter (if needed)
+                # Note: Status filter logic can be added here if needed
+                
                 trades_list.append({
                     'Timestamp': trade.get('timestamp', ''),
                     'Symbol': trade.get('symbol', ''),

@@ -45,6 +45,7 @@ COPY --from=builder /root/.local /root/.local
 COPY requirements.txt .
 COPY start_cloud.sh .
 COPY core/ ./core/
+COPY utils/ ./utils/
 COPY dashboard_app.py .
 COPY mike_agent_live_safe.py .
 # Copy other essential Python files (but not test files - excluded by .dockerignore)
@@ -54,14 +55,14 @@ COPY *.py ./
 RUN chmod +x start_cloud.sh
 
 # Clean up unnecessary files to reduce image size
-# IMPORTANT: Preserve version.txt and METADATA files (needed by packages like stable-baselines3)
+# IMPORTANT: Preserve version.txt, METADATA files, and numpy test modules (needed by scipy)
 RUN find /root/.local -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true && \
     find /root/.local -type f -name "*.pyc" -delete 2>/dev/null || true && \
     find /root/.local -type f -name "*.pyo" -delete 2>/dev/null || true && \
     find /root/.local -name "*.md" -delete 2>/dev/null || true && \
-    find /root/.local/lib/python*/site-packages -type d -name "tests" -not -path "*/torch/testing*" -exec rm -rf {} + 2>/dev/null || true && \
-    find /root/.local/lib/python*/site-packages -type d -name "test" -not -path "*/torch/testing*" -not -name "testing" -exec rm -rf {} + 2>/dev/null || true
-# Note: We preserve all .txt files (including version.txt) to avoid breaking package imports
+    find /root/.local/lib/python*/site-packages -type d -name "tests" -not -path "*/torch/testing*" -not -path "*/numpy/*" -exec rm -rf {} + 2>/dev/null || true && \
+    find /root/.local/lib/python*/site-packages -type d -name "test" -not -path "*/torch/testing*" -not -path "*/numpy/*" -not -name "testing" -exec rm -rf {} + 2>/dev/null || true
+# Note: We preserve all .txt files (including version.txt) and numpy test modules (needed by scipy)
 
 # Verify stable-baselines3 is accessible (but don't fail if version.txt is missing - package may still work)
 RUN python -c "import sys; sys.path.insert(0, '/root/.local/lib/python3.11/site-packages'); import stable_baselines3; print('✓ stable-baselines3 installed')" 2>/dev/null || \

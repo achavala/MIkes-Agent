@@ -21,3 +21,10 @@ primary_region = 'dfw'
   memory = '2gb'
   cpus = 2
   memory_mb = 2048
+
+# Persistent volume for trade database (ensures data survives VM restarts)
+# To create the volume, run: fly volumes create trades_data --size 1 --app mike-agent-project
+# Note: Volume is optional - database will persist on VM filesystem, but volume provides extra safety
+# [[mounts]]
+#   source = "trades_data"
+#   destination = "/data"

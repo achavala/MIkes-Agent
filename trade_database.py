@@ -177,8 +177,10 @@ class TradeDatabase:
             if 'filled_at' not in columns:
                 cursor.execute("ALTER TABLE trades ADD COLUMN filled_at TEXT")
             
+            # Use INSERT OR IGNORE to prevent duplicates and never delete trades
+            # The UNIQUE constraint on (timestamp, symbol, action, qty) prevents exact duplicates
             cursor.execute("""
-                INSERT OR REPLACE INTO trades (
+                INSERT OR IGNORE INTO trades (
                     timestamp, symbol, underlying, expiration_date, strike_price, option_type,
                     is_0dte, action, qty, entry_premium, exit_premium, entry_price, exit_price,
                     fill_price, pnl, pnl_pct, regime, vix, reason, order_id, source, submitted_at, filled_at
@@ -293,6 +295,72 @@ class TradeDatabase:
             'avg_win': float(wins.mean()) if len(wins) > 0 else 0.0,
             'avg_loss': float(losses.mean()) if len(losses) > 0 else 0.0
         }
+    
+    def get_daily_pnl_summary(self, filter_0dte: bool = False) -> pd.DataFrame:
+        """
+        Get daily P&L summary - groups trades by date and calculates daily totals
+        Returns DataFrame with columns: date, num_trades, total_pnl, winning_trades, losing_trades
+        """
+        conn = sqlite3.connect(self.db_path)
+        
+        query = """
+            SELECT 
+                DATE(timestamp) as date,
+                COUNT(DISTINCT CASE WHEN action = 'BUY' THEN symbol || timestamp END) as num_trades,
+                SUM(CASE WHEN action = 'SELL' THEN pnl ELSE 0 END) as total_pnl,
+                SUM(CASE WHEN action = 'SELL' AND pnl > 0 THEN 1 ELSE 0 END) as winning_trades,
+                SUM(CASE WHEN action = 'SELL' AND pnl < 0 THEN 1 ELSE 0 END) as losing_trades,
+                SUM(CASE WHEN action = 'SELL' AND pnl > 0 THEN pnl ELSE 0 END) as total_wins,
+                SUM(CASE WHEN action = 'SELL' AND pnl < 0 THEN pnl ELSE 0 END) as total_losses
+            FROM trades
+        """
+        
+        if filter_0dte:
+            query += " WHERE is_0dte = 1"
+        
+        query += " GROUP BY DATE(timestamp) ORDER BY date DESC"
+        
+        df = pd.read_sql_query(query, conn)
+        conn.close()
+        
+        if not df.empty:
+            # Calculate win rate per day
+            df['win_rate'] = (df['winning_trades'] / (df['winning_trades'] + df['losing_trades']) * 100).fillna(0.0)
+            # Round to 2 decimals
+            df['total_pnl'] = df['total_pnl'].round(2)
+            df['total_wins'] = df['total_wins'].round(2)
+            df['total_losses'] = df['total_losses'].round(2)
+            df['win_rate'] = df['win_rate'].round(1)
+        
+        return df
+    
+    def get_trades_by_date_range(self, start_date: str = None, end_date: str = None, filter_0dte: bool = False) -> pd.DataFrame:
+        """
+        Get all trades with full details, optionally filtered by date range
+        Returns DataFrame with all trade columns
+        """
+        conn = sqlite3.connect(self.db_path)
+        
+        query = "SELECT * FROM trades WHERE 1=1"
+        params = []
+        
+        if filter_0dte:
+            query += " AND is_0dte = 1"
+        
+        if start_date:
+            query += " AND DATE(timestamp) >= ?"
+            params.append(start_date)
+        
+        if end_date:
+            query += " AND DATE(timestamp) <= ?"
+            params.append(end_date)
+        
+        query += " ORDER BY timestamp DESC"
+        
+        df = pd.read_sql_query(query, conn, params=params if params else None)
+        conn.close()
+        
+        return df
     
     def backup_database(self, backup_path: str = None) -> str:
         """Create backup of database"""

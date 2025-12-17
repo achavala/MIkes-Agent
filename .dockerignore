@@ -59,8 +59,11 @@ build/
 .DS_Store
 Thumbs.db
 
-# Test files
+# Test files (but allow test_telegram*.py and get_chat_id.py for production testing)
 test_*.py
+!test_telegram.py
+!test_telegram_direct.py
+get_chat_id.py
 *_test.py
 *_tests.py
 
