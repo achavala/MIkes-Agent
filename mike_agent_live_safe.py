@@ -1363,30 +1363,47 @@ def load_rl_model():
             print("Falling back to standard PPO...")
     
     # Fallback to standard PPO
+    # CRITICAL: Suppress warnings and use minimal options to avoid segfaults
+    import warnings
+    
     try:
-        # Try loading with custom_objects to handle version mismatches
-        model = PPO.load(MODEL_PATH, custom_objects={})
-        print("✓ Model loaded successfully (standard PPO, no action masking)")
-        return model
-    except Exception as e:
-        # If that fails, try loading with device='cpu' explicitly
-        try:
-            import torch
-            model = PPO.load(MODEL_PATH, device='cpu', custom_objects={})
-            print("✓ Model loaded successfully (standard PPO, CPU device)")
-            return model
-        except Exception as e2:
-            # Last resort: try loading with print_system_info=False
+        # Method 1: Try loading with custom_objects and suppressed warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
             try:
-                model = PPO.load(MODEL_PATH, print_system_info=False, custom_objects={})
-                print("✓ Model loaded successfully (standard PPO, no system info)")
+                model = PPO.load(MODEL_PATH, custom_objects={}, print_system_info=False)
+                print("✓ Model loaded successfully (standard PPO, no action masking)")
                 return model
-            except Exception as e3:
-                raise RuntimeError(
-                    f"Failed to load model from {MODEL_PATH}. "
-                    f"Tried standard PPO, CPU device, and no system info. "
-                    f"Last error: {e3}"
-                )
+            except Exception as e1:
+                # Method 2: Try with explicit CPU device
+                try:
+                    import torch
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore")
+                        model = PPO.load(MODEL_PATH, device='cpu', custom_objects={}, print_system_info=False)
+                    print("✓ Model loaded successfully (standard PPO, CPU device)")
+                    return model
+                except Exception as e2:
+                    # Method 3: Try with minimal options only
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore")
+                        model = PPO.load(MODEL_PATH, print_system_info=False)
+                    print("✓ Model loaded successfully (standard PPO, minimal options)")
+                    return model
+    except Exception as e:
+        # If all methods fail, provide detailed error
+        error_msg = str(e)
+        print(f"❌ Model loading failed: {error_msg}")
+        print(f"   Model path: {MODEL_PATH}")
+        print(f"   File exists: {os.path.exists(MODEL_PATH)}")
+        if os.path.exists(MODEL_PATH):
+            import os
+            size = os.path.getsize(MODEL_PATH)
+            print(f"   File size: {size:,} bytes ({size/1024/1024:.2f} MB)")
+        raise RuntimeError(
+            f"Failed to load model from {MODEL_PATH}. "
+            f"Error: {error_msg}"
+        )
 
 # ==================== OPTION SYMBOL HELPERS ====================
 def get_option_symbol(underlying: str, strike: float, option_type: str) -> str:
