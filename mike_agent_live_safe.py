@@ -1352,7 +1352,8 @@ def load_rl_model():
         pass
     
     # Try MaskablePPO (for action masking support)
-    if MASKABLE_PPO_AVAILABLE:
+    # Skip for historical model - it's a standard PPO model
+    if MASKABLE_PPO_AVAILABLE and "historical" not in MODEL_PATH.lower():
         try:
             model = MaskablePPO.load(MODEL_PATH)
             print("✓ Model loaded successfully (MaskablePPO with action masking)")
