@@ -42,8 +42,10 @@ data/
 .env
 
 # Models (too large, should be downloaded or mounted)
-models/
-*.zip
+# Allow models directory and zip files within it (needed for trained historical model)
+models/checkpoints/
+models/*.zip
+!models/mike_historical_model.zip
 *.tar.gz
 *.pkl
 *.h5
