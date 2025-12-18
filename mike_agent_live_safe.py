@@ -389,10 +389,11 @@ USE_PAPER = os.getenv('ALPACA_PAPER', 'true').lower() == 'true'
 BASE_URL = PAPER_URL if USE_PAPER else LIVE_URL
 
 # ==================== MODEL CONFIG ====================
-# Use the trained historical model (5M timesteps, 23.9 years of data, PPO)
-# Trained on SPY, QQQ, SPX with historical data (2002-2025) and regime-aware sampling
-# Completed: December 9, 2025
-MODEL_PATH = "models/mike_historical_model.zip"
+# Use the trained 23-feature model (5M timesteps, 2 years of 1-minute data, PPO)
+# Trained on SPY, QQQ, IWM with Alpaca API data (Dec 2023 - Dec 2025) and all 23 features
+# Features: OHLCV (5) + VIX (2) + Technical Indicators (11) + Greeks (4) = 23 features
+# Completed: December 17, 2025
+MODEL_PATH = "models/mike_23feature_model_final.zip"
 LOOKBACK = 20
 
 # ==================== ACTION MAPPING (CANONICAL) ====================
@@ -1349,18 +1350,18 @@ def load_rl_model():
     
     # Try RecurrentPPO first (LSTM models) - SKIP for historical models
     if not is_historical_model:
-    try:
-        from sb3_contrib import RecurrentPPO
         try:
-            model = RecurrentPPO.load(MODEL_PATH)
-            print("✓ Model loaded successfully (RecurrentPPO with LSTM temporal intelligence)")
-            return model
-        except Exception as e:
-            # Not a RecurrentPPO model, continue to other options
+            from sb3_contrib import RecurrentPPO
+            try:
+                model = RecurrentPPO.load(MODEL_PATH)
+                print("✓ Model loaded successfully (RecurrentPPO with LSTM temporal intelligence)")
+                return model
+            except Exception as e:
+                # Not a RecurrentPPO model, continue to other options
+                pass
+        except ImportError:
+            # RecurrentPPO not available
             pass
-    except ImportError:
-        # RecurrentPPO not available
-        pass
     
     # Try MaskablePPO (for action masking support) - SKIP for historical models
     if MASKABLE_PPO_AVAILABLE and not is_historical_model:
@@ -1386,7 +1387,7 @@ def load_rl_model():
                 print("  Method 1: PPO.load with custom_objects={}, print_system_info=False")
                 model = PPO.load(MODEL_PATH, custom_objects={}, print_system_info=False)
                 print("✓ Model loaded successfully (standard PPO)")
-    return model
+                return model
             except Exception as e1:
                 # Method 2: Try with explicit CPU device
                 try:
@@ -1434,24 +1435,24 @@ def estimate_premium(price: float, strike: float, option_type: str) -> float:
     """Estimate option premium using Black-Scholes with fallback"""
     # Try to use scipy for accurate Black-Scholes
     try:
-    from scipy.stats import norm
-    
-    T = config.T if hasattr(config, 'T') else 1/365
-    r = config.R if hasattr(config, 'R') else 0.04
-    sigma = config.DEFAULT_SIGMA if hasattr(config, 'DEFAULT_SIGMA') else 0.20
-    
-    if T <= 0:
-        return max(0.01, abs(price - strike))
-    
-    d1 = (np.log(price / strike) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
-    d2 = d1 - sigma * np.sqrt(T)
-    
-    if option_type == 'call':
-        premium = price * norm.cdf(d1) - strike * np.exp(-r * T) * norm.cdf(d2)
-    else:  # put
-        premium = strike * np.exp(-r * T) * norm.cdf(-d2) - price * norm.cdf(-d1)
-    
-    return max(0.01, premium)
+        from scipy.stats import norm
+        
+        T = config.T if hasattr(config, 'T') else 1/365
+        r = config.R if hasattr(config, 'R') else 0.04
+        sigma = config.DEFAULT_SIGMA if hasattr(config, 'DEFAULT_SIGMA') else 0.20
+        
+        if T <= 0:
+            return max(0.01, abs(price - strike))
+        
+        d1 = (np.log(price / strike) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
+        d2 = d1 - sigma * np.sqrt(T)
+        
+        if option_type == 'call':
+            premium = price * norm.cdf(d1) - strike * np.exp(-r * T) * norm.cdf(d2)
+        else:  # put
+            premium = strike * np.exp(-r * T) * norm.cdf(-d2) - price * norm.cdf(-d1)
+        
+        return max(0.01, premium)
     except (ImportError, ModuleNotFoundError, AttributeError):
         # Fallback: Simple intrinsic + time value estimation (no scipy required)
         # This is less accurate but allows trading to continue

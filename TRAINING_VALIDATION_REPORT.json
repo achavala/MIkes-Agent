@@ -1,0 +1,162 @@
+{
+  "timestamp": "2025-12-18T06:54:13.423746",
+  "data_sources": {
+    "alpaca": [
+      {
+        "file": "QQQ_1m_2023-12-18_2025-12-17_alpaca.pkl",
+        "symbol": "QQQ",
+        "bars": 179308,
+        "date_range": "2023-12-18 09:31:00+00:00 to 2025-12-17 16:00:00+00:00",
+        "columns": [
+          "close",
+          "high",
+          "low",
+          "trade_count",
+          "open",
+          "volume",
+          "vwap"
+        ]
+      },
+      {
+        "file": "IWM_1m_2023-12-18_2025-12-17_alpaca.pkl",
+        "symbol": "IWM",
+        "bars": 157707,
+        "date_range": "2023-12-18 09:30:00+00:00 to 2025-12-17 16:00:00+00:00",
+        "columns": [
+          "close",
+          "high",
+          "low",
+          "trade_count",
+          "open",
+          "volume",
+          "vwap"
+        ]
+      },
+      {
+        "file": "SPY_1m_2023-12-18_2025-12-17_alpaca.pkl",
+        "symbol": "SPY",
+        "bars": 166227,
+        "date_range": "2023-12-18 09:31:00+00:00 to 2025-12-17 16:00:00+00:00",
+        "columns": [
+          "close",
+          "high",
+          "low",
+          "trade_count",
+          "open",
+          "volume",
+          "vwap"
+        ]
+      }
+    ],
+    "massive": [
+      {
+        "file": "SPX_1m_2025-12-02_2025-12-12_massive.pkl",
+        "symbol": "SPX",
+        "bars": 3181,
+        "date_range": "2025-12-02 14:30:00 to 2025-12-12 15:09:00",
+        "columns": [
+          "open",
+          "high",
+          "low",
+          "close"
+        ]
+      },
+      {
+        "file": "QQQ_1m_2025-12-07_2025-12-12_massive.pkl",
+        "symbol": "QQQ",
+        "bars": 4552,
+        "date_range": "2025-12-08 09:00:00 to 2025-12-12 22:56:00",
+        "columns": [
+          "open",
+          "high",
+          "low",
+          "close",
+          "volume"
+        ]
+      },
+      {
+        "file": "QQQ_1m_2025-12-06_2025-12-11_massive.pkl",
+        "symbol": "QQQ",
+        "bars": 3734,
+        "date_range": "2025-12-08 09:00:00 to 2025-12-12 00:59:00",
+        "columns": [
+          "open",
+          "high",
+          "low",
+          "close",
+          "volume"
+        ]
+      },
+      {
+        "file": "SPY_1m_2025-12-02_2025-12-12_massive.pkl",
+        "symbol": "SPY",
+        "bars": 7543,
+        "date_range": "2025-12-02 09:00:00 to 2025-12-12 14:54:00",
+        "columns": [
+          "open",
+          "high",
+          "low",
+          "close",
+          "volume"
+        ]
+      }
+    ],
+    "yfinance": [
+      {
+        "file": "SPY_1m_2002-01-01_2025-12-06.pkl",
+        "symbol": "SPY",
+        "bars": 7216
+      },
+      {
+        "file": "SPX_1d_2002-01-01_2025-12-07.pkl",
+        "symbol": "SPX",
+        "bars": 6022
+      },
+      {
+        "file": "QQQ_1d_2002-01-01_2025-12-07.pkl",
+        "symbol": "QQQ",
+        "bars": 6022
+      }
+    ]
+  },
+  "model_files": {
+    "old_model": {
+      "path": "models/mike_historical_model.zip",
+      "size_mb": 10.912976264953613,
+      "features": 10,
+      "exists": true
+    },
+    "new_model_partial": {
+      "path": "models/mike_23feature_model.zip",
+      "size_mb": 17.82591438293457,
+      "features": 23,
+      "timesteps": 2500000,
+      "exists": true
+    },
+    "new_model_final": {
+      "path": "models/mike_23feature_model_final.zip",
+      "size_mb": 17.825885772705078,
+      "features": 23,
+      "timesteps": 5000000,
+      "exists": true
+    }
+  },
+  "model_loading": {
+    "old_model": {
+      "loaded": true,
+      "observation_shape": [
+        20,
+        10
+      ],
+      "action_space": "Discrete(6)"
+    },
+    "new_model": {
+      "loaded": true,
+      "observation_shape": [
+        20,
+        23
+      ],
+      "action_space": "Discrete(6)"
+    }
+  }
+}

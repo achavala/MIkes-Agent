@@ -40,7 +40,7 @@ echo "🧪 Starting Agent in ${MODE^^} mode..."
 
 # Model download logic (FULLY AUTOMATIC - no manual intervention needed)
 # Use the trained historical model (5M timesteps, 23.9 years of data)
-MODEL_PATH="models/mike_historical_model.zip"
+MODEL_PATH="models/mike_23feature_model_final.zip"
 MODEL_DIR="models"
 
 # Create models directory if it doesn't exist
