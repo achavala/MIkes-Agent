@@ -190,14 +190,14 @@ USE_INSTITUTIONAL_FEATURES = True  # Enable institutional-grade features
 # ==================== TRADING SYMBOLS ====================
 # Symbols to trade (0DTE options)
 # NOTE: SPX options are NOT available in Alpaca paper trading (index options require special permissions)
-# Using SPY/QQQ only (ETFs fully supported in paper trading)
-TRADING_SYMBOLS = ['SPY', 'QQQ']  # SPX removed - not available in Alpaca paper trading
+# Using SPY/QQQ/IWM (ETFs fully supported in paper trading)
+TRADING_SYMBOLS = ['SPY', 'QQQ', 'IWM']  # All ETFs with 0DTE options support
 
 # ==================== RISK LIMITS (HARD-CODED – CANNOT BE OVERRIDDEN) ====================
 DAILY_LOSS_LIMIT = -0.15  # -15% daily loss limit
 HARD_DAILY_LOSS_DOLLAR = -500  # Hard stop: Stop trading if daily loss > $500 (absolute dollar limit)
 MAX_POSITION_PCT = 0.25  # Max 25% of equity in one position
-MAX_CONCURRENT = 2  # Max 2 positions at once (one per symbol: SPY, QQQ)
+MAX_CONCURRENT = 3  # Max 3 positions at once (one per symbol: SPY, QQQ, IWM)
 MAX_TRADES_PER_SYMBOL = 10  # Max 10 trades per symbol per day (reduced from 100 to prevent overtrading)
 MIN_TRADE_COOLDOWN_SECONDS = 60  # Minimum 60 seconds between ANY trades (increased from 5s to prevent rapid-fire trading)
 VIX_KILL = 28  # No trades if VIX > 28
@@ -1031,7 +1031,7 @@ def get_market_data(symbol: str, period: str = "2d", interval: str = "1m", api: 
             risk_mgr.log(f"🔍 Alpaca API available for {symbol}, attempting data fetch...", "INFO")
         try:
             from alpaca_trade_api.rest import TimeFrame
-            from datetime import datetime, timedelta
+            # datetime and timedelta already imported at top of file
             
             # Calculate date range - get full 2 days including today
             # For 2 days: get data from 2 days ago to today (inclusive)
@@ -1156,6 +1156,7 @@ def get_market_data(symbol: str, period: str = "2d", interval: str = "1m", api: 
     massive_symbol_map = {
         'SPY': 'SPY',
         'QQQ': 'QQQ',
+        'IWM': 'IWM',
         'SPX': 'SPX',  # Polygon uses SPX (not ^SPX)
         '^SPX': 'SPX'
     }
@@ -1269,7 +1270,7 @@ def get_market_data(symbol: str, period: str = "2d", interval: str = "1m", api: 
             risk_mgr.log(f"❌ All data sources failed for {symbol}: {e}", "ERROR")
         return pd.DataFrame()
     
-    return pd.DataFrame()
+        return pd.DataFrame()
 
 def get_current_price(symbol: str) -> Optional[float]:
     """
@@ -1287,6 +1288,7 @@ def get_current_price(symbol: str) -> Optional[float]:
     massive_symbol_map = {
         'SPY': 'SPY',
         'QQQ': 'QQQ',
+        'IWM': 'IWM',
         'SPX': 'SPX',
         '^SPX': 'SPX',
         'VIX.X': 'VIX.X',  # VIX on Polygon
@@ -1336,8 +1338,17 @@ def load_rl_model():
         )
     
     print(f"Loading RL model from {MODEL_PATH}...")
+    print(f"Model path check: is_historical_model = {'historical' in MODEL_PATH.lower()}")
     
-    # Try RecurrentPPO first (LSTM models)
+    # CRITICAL FIX: For historical model (standard PPO), skip RecurrentPPO/MaskablePPO attempts
+    # These cause "no locals when deleting <NULL>" errors when loading standard PPO models
+    is_historical_model = "historical" in MODEL_PATH.lower()
+    
+    if is_historical_model:
+        print("✓ Detected historical model - skipping RecurrentPPO/MaskablePPO, loading as standard PPO")
+    
+    # Try RecurrentPPO first (LSTM models) - SKIP for historical models
+    if not is_historical_model:
     try:
         from sb3_contrib import RecurrentPPO
         try:
@@ -1351,9 +1362,8 @@ def load_rl_model():
         # RecurrentPPO not available
         pass
     
-    # Try MaskablePPO (for action masking support)
-    # Skip for historical model - it's a standard PPO model
-    if MASKABLE_PPO_AVAILABLE and "historical" not in MODEL_PATH.lower():
+    # Try MaskablePPO (for action masking support) - SKIP for historical models
+    if MASKABLE_PPO_AVAILABLE and not is_historical_model:
         try:
             model = MaskablePPO.load(MODEL_PATH)
             print("✓ Model loaded successfully (MaskablePPO with action masking)")
@@ -1362,18 +1372,21 @@ def load_rl_model():
             print(f"Warning: Could not load as MaskablePPO: {e}")
             print("Falling back to standard PPO...")
     
-    # Fallback to standard PPO
+    # Load as standard PPO (for historical model or fallback)
     # CRITICAL: Suppress warnings and use minimal options to avoid segfaults
     import warnings
+    
+    print("Attempting to load as standard PPO...")
     
     try:
         # Method 1: Try loading with custom_objects and suppressed warnings
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             try:
+                print("  Method 1: PPO.load with custom_objects={}, print_system_info=False")
                 model = PPO.load(MODEL_PATH, custom_objects={}, print_system_info=False)
-                print("✓ Model loaded successfully (standard PPO, no action masking)")
-                return model
+                print("✓ Model loaded successfully (standard PPO)")
+    return model
             except Exception as e1:
                 # Method 2: Try with explicit CPU device
                 try:
@@ -1421,24 +1434,24 @@ def estimate_premium(price: float, strike: float, option_type: str) -> float:
     """Estimate option premium using Black-Scholes with fallback"""
     # Try to use scipy for accurate Black-Scholes
     try:
-        from scipy.stats import norm
-        
-        T = config.T if hasattr(config, 'T') else 1/365
-        r = config.R if hasattr(config, 'R') else 0.04
-        sigma = config.DEFAULT_SIGMA if hasattr(config, 'DEFAULT_SIGMA') else 0.20
-        
-        if T <= 0:
-            return max(0.01, abs(price - strike))
-        
-        d1 = (np.log(price / strike) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
-        d2 = d1 - sigma * np.sqrt(T)
-        
-        if option_type == 'call':
-            premium = price * norm.cdf(d1) - strike * np.exp(-r * T) * norm.cdf(d2)
-        else:  # put
-            premium = strike * np.exp(-r * T) * norm.cdf(-d2) - price * norm.cdf(-d1)
-        
-        return max(0.01, premium)
+    from scipy.stats import norm
+    
+    T = config.T if hasattr(config, 'T') else 1/365
+    r = config.R if hasattr(config, 'R') else 0.04
+    sigma = config.DEFAULT_SIGMA if hasattr(config, 'DEFAULT_SIGMA') else 0.20
+    
+    if T <= 0:
+        return max(0.01, abs(price - strike))
+    
+    d1 = (np.log(price / strike) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
+    d2 = d1 - sigma * np.sqrt(T)
+    
+    if option_type == 'call':
+        premium = price * norm.cdf(d1) - strike * np.exp(-r * T) * norm.cdf(d2)
+    else:  # put
+        premium = strike * np.exp(-r * T) * norm.cdf(-d2) - price * norm.cdf(-d1)
+    
+    return max(0.01, premium)
     except (ImportError, ModuleNotFoundError, AttributeError):
         # Fallback: Simple intrinsic + time value estimation (no scipy required)
         # This is less accurate but allows trading to continue
@@ -1446,7 +1459,7 @@ def estimate_premium(price: float, strike: float, option_type: str) -> float:
         # Add time value: roughly 1-2% of underlying for 0DTE
         time_value = price * 0.015  # 1.5% time value for 0DTE
         premium = intrinsic + time_value
-        return max(0.01, premium)
+    return max(0.01, premium)
 
 def extract_underlying_from_option(option_symbol: str) -> str:
     """Extract underlying symbol from option symbol (SPY251205C00685000 -> SPY)"""
@@ -2407,14 +2420,70 @@ def prepare_observation(data: pd.DataFrame, risk_mgr: RiskManager, symbol: str =
     
     The momentum model (mike_momentum_model_v3_lstm.zip) uses (20, 23) features:
     - OHLCV (5) + VIX (2) + Technical (11) + Greeks (4) + Other (1) = 23 features
+    
+    CRITICAL: Observation space MUST match training exactly or model will fail silently.
     """
     # Check which model we're using
-    if "mike_historical_model" in MODEL_PATH:
+    # 23-feature models: mike_23feature_model, mike_momentum_model_v3_lstm
+    # 10-feature models: mike_historical_model
+    if "mike_23feature_model" in MODEL_PATH or "mike_momentum_model" in MODEL_PATH:
+        # Use 23-feature observation for models trained with all technical indicators
+        obs = prepare_observation_basic(data, risk_mgr, symbol)
+        # CRITICAL VALIDATION: Ensure observation shape matches training exactly
+        if obs.shape != (20, 23):
+            error_msg = (
+                f"❌ CRITICAL: Observation shape mismatch for 23-feature model!\n"
+                f"   Expected: (20, 23) | Got: {obs.shape}\n"
+                f"   Model: {MODEL_PATH}\n"
+                f"   This will cause silent model failure and poor generalization.\n"
+                f"   Fix: Ensure prepare_observation_basic returns exactly (20, 23)"
+            )
+            print(error_msg)
+            if risk_mgr:
+                risk_mgr.log(error_msg, "ERROR")
+            # Force correct shape (safety fallback)
+            if obs.shape[1] > 23:
+                obs = obs[:, :23]
+            elif obs.shape[1] < 23:
+                padding = np.zeros((20, 23 - obs.shape[1]), dtype=np.float32)
+                obs = np.column_stack([obs, padding])
+        return obs
+    elif "mike_historical_model" in MODEL_PATH:
         # Use 10-feature observation for historical model
-        return prepare_observation_10_features_inline(data, risk_mgr, symbol)
+        obs = prepare_observation_10_features_inline(data, risk_mgr, symbol)
+        # CRITICAL VALIDATION: Ensure observation shape matches training exactly
+        if obs.shape != (20, 10):
+            error_msg = (
+                f"❌ CRITICAL: Observation shape mismatch for historical model!\n"
+                f"   Expected: (20, 10) | Got: {obs.shape}\n"
+                f"   Model: {MODEL_PATH}\n"
+                f"   This will cause silent model failure and poor generalization.\n"
+                f"   Fix: Ensure prepare_observation_10_features_inline returns exactly (20, 10)"
+            )
+            print(error_msg)
+            if risk_mgr:
+                risk_mgr.log(error_msg, "ERROR")
+            # Force correct shape (safety fallback)
+            if obs.shape[1] > 10:
+                obs = obs[:, :10]
+            elif obs.shape[1] < 10:
+                padding = np.zeros((20, 10 - obs.shape[1]), dtype=np.float32)
+                obs = np.column_stack([obs, padding])
+        return obs
     else:
         # Use 23-feature observation for momentum model
-        return prepare_observation_basic(data, risk_mgr, symbol)
+        obs = prepare_observation_basic(data, risk_mgr, symbol)
+        # Validation for momentum model
+        if obs.shape != (20, 23):
+            error_msg = (
+                f"⚠️  Observation shape mismatch for momentum model!\n"
+                f"   Expected: (20, 23) | Got: {obs.shape}\n"
+                f"   Model: {MODEL_PATH}"
+            )
+            print(error_msg)
+            if risk_mgr:
+                risk_mgr.log(error_msg, "WARNING")
+        return obs
 
 def prepare_observation_10_features_inline(data: pd.DataFrame, risk_mgr: RiskManager, symbol: str = 'SPY') -> np.ndarray:
     """
@@ -3013,8 +3082,25 @@ def run_safe_live_trading():
                         # Prepare observation for THIS symbol
                         obs = prepare_observation(sym_hist, risk_mgr, symbol=sym)
                         
-                        # 🔍 DEBUG: Log observation stats
-                        risk_mgr.log(f"🔍 {sym} Observation: shape={obs.shape}, min={obs.min():.2f}, max={obs.max():.2f}, mean={obs.mean():.2f}, has_nan={np.isnan(obs).any()}, all_zero={(obs == 0).all()}", "DEBUG")
+                        # 🔍 CRITICAL VALIDATION: Log observation stats and verify shape
+                        # Determine expected shape based on model type
+                        if "mike_23feature_model" in MODEL_PATH or "mike_momentum_model" in MODEL_PATH:
+                            expected_shape = (20, 23)
+                        elif "mike_historical_model" in MODEL_PATH:
+                            expected_shape = (20, 10)
+                        else:
+                            expected_shape = (20, 23)  # Default to 23 for unknown models
+                        if obs.shape != expected_shape:
+                            risk_mgr.log(
+                                f"❌ CRITICAL: {sym} Observation shape mismatch! Expected {expected_shape}, got {obs.shape}. "
+                                f"Model will fail silently. This is a critical bug.",
+                                "ERROR"
+                            )
+                        else:
+                            risk_mgr.log(
+                                f"✅ {sym} Observation: shape={obs.shape} (CORRECT), min={obs.min():.2f}, max={obs.max():.2f}, mean={obs.mean():.2f}, has_nan={np.isnan(obs).any()}, all_zero={(obs == 0).all()}",
+                                "DEBUG"
+                            )
                         
                         # RL Decision for THIS symbol with temperature-calibrated softmax
                         # Get raw logits from policy distribution and apply temperature
@@ -3379,6 +3465,7 @@ def run_safe_live_trading():
                 symbol_ticker_map = {
                     'SPY': 'SPY',
                     'QQQ': 'QQQ',
+                    'IWM': 'IWM',
                     'SPX': '^SPX'  # SPX index requires ^ prefix
                 }
                 

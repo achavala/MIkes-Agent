@@ -55,7 +55,117 @@ class HistoricalDataCollector:
         self.symbol_map = {'SPY': 'SPY', 'QQQ': 'QQQ', 'SPX': '^GSPC'}
         # Polygon/Massive ticker mapping (for true intraday minute bars)
         # Indices on Polygon use the "I:" prefix (e.g., I:SPX).
-        self.massive_symbol_map = {'SPY': 'SPY', 'QQQ': 'QQQ', 'SPX': 'I:SPX'}
+        self.massive_symbol_map = {'SPY': 'SPY', 'QQQ': 'QQQ', 'IWM': 'IWM', 'SPX': 'I:SPX'}
+
+    def get_historical_data_alpaca(
+        self,
+        symbol: str,
+        start_date: str,
+        end_date: Optional[str] = None,
+        interval: str = "1m",
+        use_cache: bool = True,
+    ) -> pd.DataFrame:
+        """
+        Get historical OHLCV data from Alpaca API (PRIORITY 1 for paid members).
+        
+        Requires ALPACA_KEY and ALPACA_SECRET env vars.
+        Caches results to disk.
+        """
+        if end_date is None:
+            end_date = datetime.now().strftime("%Y-%m-%d")
+        
+        # Cache file path
+        safe_symbol = symbol.replace(":", "_")
+        cache_file = self.cache_dir / f"{safe_symbol}_{interval}_{start_date}_{end_date}_alpaca.pkl"
+        
+        if use_cache and cache_file.exists():
+            print(f"📂 Loading cached Alpaca data: {cache_file.name}")
+            try:
+                with open(cache_file, "rb") as f:
+                    df = pickle.load(f)
+                if isinstance(df, pd.DataFrame) and len(df) > 0:
+                    print(f"✅ Loaded {len(df)} bars from Alpaca cache")
+                    return df
+            except Exception as e:
+                print(f"⚠️ Alpaca cache load failed: {e}, downloading fresh data")
+        
+        # Check for Alpaca credentials
+        api_key = os.getenv('ALPACA_KEY') or os.getenv('ALPACA_API_KEY') or os.getenv('APCA_API_KEY_ID')
+        api_secret = os.getenv('ALPACA_SECRET') or os.getenv('ALPACA_SECRET_KEY') or os.getenv('APCA_API_SECRET_KEY')
+        
+        if not api_key or not api_secret:
+            print(f"⚠️ Alpaca credentials not found. Skipping Alpaca data source.")
+            return pd.DataFrame()
+        
+        try:
+            import alpaca_trade_api as tradeapi
+            from alpaca_trade_api.rest import TimeFrame
+            
+            # Use paper trading URL (or live if configured)
+            base_url = os.getenv('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets')
+            api = tradeapi.REST(api_key, api_secret, base_url, api_version='v2')
+            
+            # Convert interval to Alpaca TimeFrame
+            if interval == '1m':
+                tf = TimeFrame.Minute
+            elif interval == '5m':
+                tf = TimeFrame(5, TimeFrame.Minute)
+            elif interval == '1h':
+                tf = TimeFrame.Hour
+            elif interval == '1d':
+                tf = TimeFrame.Day
+            else:
+                tf = TimeFrame.Minute
+            
+            print(f"📥 Alpaca download: {symbol} {start_date}→{end_date} ({interval})")
+            
+            # Get bars from Alpaca
+            bars = api.get_bars(
+                symbol,
+                tf,
+                start=start_date,
+                end=end_date
+            ).df
+            
+            if len(bars) == 0:
+                print(f"⚠️ Alpaca returned 0 bars for {symbol}")
+                return pd.DataFrame()
+            
+            # Normalize column names
+            bars.columns = [col.lower() for col in bars.columns]
+            
+            # Ensure required columns
+            required = ['open', 'high', 'low', 'close', 'volume']
+            for col in required:
+                if col not in bars.columns:
+                    if col == 'volume':
+                        bars['volume'] = 0
+                    else:
+                        bars[col] = bars.get('close', 0)
+            
+            # Filter to trading hours for minute data
+            if interval == '1m' and len(bars) > 0:
+                bars = bars.between_time('09:30', '16:00')
+            
+            # Remove duplicates and sort
+            bars = bars.drop_duplicates().sort_index()
+            
+            # Cache
+            try:
+                with open(cache_file, 'wb') as f:
+                    pickle.dump(bars, f)
+                print(f"💾 Cached {len(bars)} bars from Alpaca to {cache_file.name}")
+            except Exception as e:
+                print(f"⚠️ Could not write Alpaca cache: {e}")
+            
+            return bars
+            
+        except ImportError:
+            print(f"⚠️ alpaca-trade-api not installed. Skipping Alpaca data source.")
+            return pd.DataFrame()
+        except Exception as e:
+            print(f"⚠️ Alpaca API error: {e}")
+            return pd.DataFrame()
 
     def get_historical_data_massive(
         self,
@@ -66,52 +176,80 @@ class HistoricalDataCollector:
         use_cache: bool = True,
     ) -> pd.DataFrame:
         """
-        Get historical OHLCV data from Massive/Polygon (preferred for intraday 1m bars).
-
-        Requires MASSIVE_API_KEY env var.
-        Caches results to disk.
+        Get historical OHLCV data with PRIORITY: Alpaca → Massive → yfinance
+        
+        This ensures paid data sources (Alpaca/Massive) are used before free yfinance.
         """
         if end_date is None:
             end_date = datetime.now().strftime("%Y-%m-%d")
-
-        # Cache file path (separate from yfinance cache to avoid collisions)
+        
+        # PRIORITY 1: Try Alpaca first (you're paying for this!)
+        print(f"🔑 Priority 1: Attempting Alpaca API for {symbol}...")
+        alpaca_data = self.get_historical_data_alpaca(
+            symbol=symbol,
+            start_date=start_date,
+            end_date=end_date,
+            interval=interval,
+            use_cache=use_cache
+        )
+        
+        if alpaca_data is not None and len(alpaca_data) > 0:
+            print(f"✅ SUCCESS: Got {len(alpaca_data):,} bars from Alpaca API (PAID SERVICE)")
+            print(f"   Date range: {alpaca_data.index.min()} to {alpaca_data.index.max()}")
+            return alpaca_data
+        
+        # PRIORITY 2: Try Massive API
+        print(f"🔑 Priority 2: Attempting Massive API for {symbol}...")
         safe_symbol = symbol.replace(":", "_")
         cache_file = self.cache_dir / f"{safe_symbol}_{interval}_{start_date}_{end_date}_massive.pkl"
-
+        
         if use_cache and cache_file.exists():
             print(f"📂 Loading cached Massive data: {cache_file.name}")
             try:
                 with open(cache_file, "rb") as f:
                     df = pickle.load(f)
-                if isinstance(df, pd.DataFrame):
+                if isinstance(df, pd.DataFrame) and len(df) > 0:
+                    print(f"✅ SUCCESS: Loaded {len(df):,} bars from Massive cache (PAID SERVICE)")
                     return df
             except Exception as e:
                 print(f"⚠️ Massive cache load failed: {e}, downloading fresh data")
-
+        
         # Lazy import to keep base env light
         try:
             from massive_api_client import MassiveAPIClient
         except Exception as e:
-            raise ImportError("massive_api_client.py not available; cannot use Massive/Polygon data source") from e
-
-        massive_symbol = self.massive_symbol_map.get(symbol, symbol)
-        client = MassiveAPIClient()
-        print(f"📥 Massive/Polygon download: {symbol} ({massive_symbol}) {start_date}→{end_date} ({interval})")
-        df = client.get_historical_data(massive_symbol, start_date=start_date, end_date=end_date, interval=interval)
-
-        # Basic hygiene
-        if isinstance(df.index, pd.DatetimeIndex):
-            df = df.sort_index()
-            df = df[~df.index.duplicated(keep="last")]
-
-        # Cache
-        try:
-            with open(cache_file, "wb") as f:
-                pickle.dump(df, f)
-        except Exception as e:
-            print(f"⚠️ Could not write Massive cache: {e}")
-
-        return df
+            print(f"⚠️ massive_api_client.py not available: {e}")
+            # Fall through to yfinance
+        else:
+            try:
+                massive_symbol = self.massive_symbol_map.get(symbol, symbol)
+                client = MassiveAPIClient()
+                print(f"📥 Massive/Polygon download: {symbol} ({massive_symbol}) {start_date}→{end_date} ({interval})")
+                df = client.get_historical_data(massive_symbol, start_date=start_date, end_date=end_date, interval=interval)
+                
+                if df is not None and len(df) > 0:
+                    # Basic hygiene
+                    if isinstance(df.index, pd.DatetimeIndex):
+                        df = df.sort_index()
+                        df = df[~df.index.duplicated(keep="last")]
+                    
+                    # Cache
+                    try:
+                        with open(cache_file, "wb") as f:
+                            pickle.dump(df, f)
+                    except Exception as e:
+                        print(f"⚠️ Could not write Massive cache: {e}")
+                    
+                    print(f"✅ SUCCESS: Got {len(df):,} bars from Massive API (PAID SERVICE)")
+                    print(f"   Date range: {df.index.min()} to {df.index.max()}")
+                    return df
+            except Exception as e:
+                print(f"⚠️ Massive API error: {e}")
+        
+        # PRIORITY 3: Fallback to yfinance (FREE, but limited)
+        print(f"⚠️ WARNING: Paid services (Alpaca/Massive) failed or unavailable")
+        print(f"   Falling back to yfinance (FREE, LIMITED - max 7 days for 1m data)")
+        return self.get_historical_data(symbol, start_date, end_date, interval, use_cache)
         
     def get_historical_data(
         self,
@@ -887,6 +1025,12 @@ class HistoricalTradingEnv(gym.Env):
                 reward += chase_penalty
                 if self.human_momentum_mode:
                     info["bad_chase_penalty"] = bool(chase_penalty != 0.0)
+                
+                # FIX #3: Penalize low-advantage actions (encourage selectivity over frequency)
+                # If setup_score is low (< 2.0), penalize the action to discourage overtrading
+                if self.human_momentum_mode and setup_score < 2.0:
+                    reward -= 0.15  # Significant penalty for low-confidence trades
+                    info["low_advantage_penalty"] = True
             else:
                 reward = -0.001  # Penalty for buying when already in position
         
@@ -904,6 +1048,12 @@ class HistoricalTradingEnv(gym.Env):
                 reward += chase_penalty
                 if self.human_momentum_mode:
                     info["bad_chase_penalty"] = bool(chase_penalty != 0.0)
+                
+                # FIX #3: Penalize low-advantage actions (encourage selectivity over frequency)
+                # If setup_score is low (< 2.0), penalize the action to discourage overtrading
+                if self.human_momentum_mode and setup_score < 2.0:
+                    reward -= 0.15  # Significant penalty for low-confidence trades
+                    info["low_advantage_penalty"] = True
             else:
                 reward = -0.001  # Penalty for buying when already in position
         
@@ -1164,17 +1314,37 @@ class HistoricalTradingEnv(gym.Env):
         self.unrealized_pnl = current_value - cost
     
     def _calculate_reward(self) -> float:
-        """Calculate reward for current state"""
+        """
+        Calculate reward for current state
+        
+        FIX #2: Added execution penalties to account for real-world trading costs:
+        - Spread cost: -0.05 per trade (5-20% spread in 0DTE options)
+        - Slippage: -0.01 per minute held (IV crush, poor fills)
+        - Holding time penalty: -0.01 per minute after 30 min (theta decay)
+        """
         if self.position:
             # Reward based on unrealized P&L
             pnl_pct = (self.unrealized_pnl / self.position['cost']) if self.position.get('cost', 0) else 0.0
+            duration = max(1, self.current_step - self.position.get('entry_time', self.current_step))
+            
             if not self.human_momentum_mode:
-                return pnl_pct * 0.01
+                base_reward = pnl_pct * 0.01
+                # Add execution penalties
+                spread_penalty = -0.05  # Spread cost per trade
+                slippage_penalty = -0.01 * min(duration, 60) / 60.0  # Slippage increases with time
+                holding_penalty = -0.01 * max(0, (duration - 30)) / 60.0 if duration > 30 else 0.0
+                return base_reward + spread_penalty + slippage_penalty + holding_penalty
 
             # Human scalp mode: encourage quick winners, punish slow losers
-            duration = max(1, self.current_step - self.position.get('entry_time', self.current_step))
             # small positive if green, negative if red
             shaped = pnl_pct * 0.05
+            
+            # FIX #2: Add execution penalties
+            spread_penalty = -0.05  # Spread cost per trade
+            slippage_penalty = -0.01 * min(duration, 60) / 60.0  # Slippage increases with time
+            holding_penalty = -0.01 * max(0, (duration - 30)) / 60.0 if duration > 30 else 0.0
+            shaped += spread_penalty + slippage_penalty + holding_penalty
+            
             # hard-loss zone: add steep ongoing penalty before forced stop triggers
             if pnl_pct <= -0.15:
                 shaped -= 0.2
@@ -1187,7 +1357,8 @@ class HistoricalTradingEnv(gym.Env):
             return float(shaped)
         else:
             # Small negative reward for holding cash (encourage trading)
-            return -0.0003 if self.human_momentum_mode else -0.0001
+            # FIX #3: Reduced penalty to encourage selectivity over frequency
+            return -0.0001 if self.human_momentum_mode else -0.00005
     
     def _calculate_final_reward(self) -> float:
         """Calculate final reward at episode end"""

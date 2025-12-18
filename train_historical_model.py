@@ -311,7 +311,8 @@ def train_on_historical_data(
     learning_rate: Optional[float] = None,
     ent_coef: Optional[float] = None,
     gamma: Optional[float] = None,
-    n_steps: Optional[int] = None
+    n_steps: Optional[int] = None,
+    load_model_path: Optional[str] = None
 ):
     """
     Train RL model on historical data with regime-aware sampling
@@ -322,6 +323,8 @@ def train_on_historical_data(
     print(f"Symbols: {symbols}")
     print(f"Date Range: {start_date} to {end_date or 'today'}")
     print(f"Total Timesteps: {total_timesteps:,}")
+    if load_model_path:
+        print(f"Resuming from model: {load_model_path}")
     print(f"Use Greeks: {use_greeks}")
     print(f"Use Features: {use_features}")
     print(f"Human Momentum Mode: {human_momentum}")
@@ -354,6 +357,8 @@ def train_on_historical_data(
 
         for symbol in symbols:
             print(f"\n📊 Loading {symbol} intraday data (1m)...")
+            print(f"   🔑 Data Source Priority: Alpaca → Massive → yfinance")
+            print(f"   💰 Using PAID services first (Alpaca/Massive)")
             try:
                 df = collector.get_historical_data_massive(
                     symbol=symbol,
@@ -363,7 +368,7 @@ def train_on_historical_data(
                     use_cache=True,
                 )
                 if df is None or len(df) == 0:
-                    print(f"   ⚠️  No intraday data returned for {symbol}")
+                    print(f"   ❌ No intraday data returned for {symbol} from any source")
                     continue
 
                 required_cols = ['open', 'high', 'low', 'close', 'volume']
@@ -782,6 +787,7 @@ def main():
     parser.add_argument('--ent-coef', type=float, default=None, help='Override entropy coefficient (e.g. 0.02)')
     parser.add_argument('--gamma', type=float, default=None, help='Override gamma discount (e.g. 0.92)')
     parser.add_argument('--n-steps', type=int, default=None, help='Override n_steps (e.g. 512)')
+    parser.add_argument('--load-model', type=str, default=None, help='Path to existing model to resume training')
     parser.add_argument('--dry-run', action='store_true', default=False,
                         help='Validate environment + API key detection, then exit (no training).')
     
@@ -820,7 +826,8 @@ def main():
         learning_rate=args.learning_rate,
         ent_coef=args.ent_coef,
         gamma=args.gamma,
-        n_steps=args.n_steps
+        n_steps=args.n_steps,
+        load_model_path=args.load_model
     )
 
 
