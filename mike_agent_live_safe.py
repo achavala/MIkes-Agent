@@ -1377,10 +1377,10 @@ def load_rl_model():
                 return model
             except Exception as e:
                 # Not a RecurrentPPO model, continue to other options
+                pass
+        except ImportError:
+            # RecurrentPPO not available
             pass
-    except ImportError:
-        # RecurrentPPO not available
-        pass
     
     # Try MaskablePPO (for action masking support) - SKIP for historical models
     if MASKABLE_PPO_AVAILABLE and not is_historical_model:
