@@ -1496,7 +1496,7 @@ def estimate_premium(price: float, strike: float, option_type: str) -> float:
     """Estimate option premium using Black-Scholes with fallback"""
     # Try to use scipy for accurate Black-Scholes
     try:
-    from scipy.stats import norm
+        from scipy.stats import norm
     
     T = config.T if hasattr(config, 'T') else 1/365
     r = config.R if hasattr(config, 'R') else 0.04
