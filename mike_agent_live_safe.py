@@ -920,7 +920,14 @@ def choose_best_symbol_for_trade(iteration: int, symbol_actions: dict, target_ac
         if sym not in symbol_actions:
             continue
         
-        action, source, strength = symbol_actions[sym]
+        # Handle dict format
+        action_data = symbol_actions[sym]
+        if isinstance(action_data, dict):
+            action = action_data.get('action', 0)
+            source = action_data.get('action_source', 'unknown')
+            strength = action_data.get('action_strength', 0.0)
+        else:
+            action, source, strength = action_data
         if action != target_action:
             continue
         
@@ -3545,8 +3552,13 @@ def run_safe_live_trading():
                             action_strength = final_confidence
                         
                         action = int(action)
-                        # Store per-symbol action with confidence and TA result
-                        symbol_actions[sym] = (action, action_source, action_strength, ta_result)
+                        # Store per-symbol action with confidence and TA result (dict format)
+                        symbol_actions[sym] = {
+                            'action': action,
+                            'action_source': action_source,
+                            'action_strength': action_strength,
+                            'ta_result': ta_result
+                        }
                         
                         # Log per-symbol RL decision (using canonical action mapping)
                         # Show original action if it was remapped/masked
