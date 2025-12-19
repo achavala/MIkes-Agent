@@ -1369,7 +1369,7 @@ def load_rl_model():
     
     # Try RecurrentPPO first (LSTM models) - SKIP for historical models
     if not is_historical_model:
-    try:
+        try:
         from sb3_contrib import RecurrentPPO
         try:
             model = RecurrentPPO.load(MODEL_PATH)
