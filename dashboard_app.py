@@ -920,75 +920,123 @@ def get_active_positions():
         return pd.DataFrame()
 
 def get_agent_status():
-    """Get agent status - checks both local and Fly.io deployment"""
+    """Get agent status - checks process, logs, and health files"""
     running = False
     uptime = 'N/A'
     deployment_info = None
     
-    # First, try to check Fly.io status (for deployed agents)
+    # Method 1: Check for agent process (works in Fly.io container)
     try:
-        import subprocess
-        result = subprocess.run(
-            ['fly', 'status', '--app', 'mike-agent-project', '--json'],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        if result.returncode == 0:
-            status_data = json.loads(result.stdout)
-            # Check if machines are in "started" state
-            machines = status_data.get('Machines', [])
-            if machines:
-                started_machines = [m for m in machines if m.get('State') == 'started']
-                if started_machines:
+        import psutil
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline', 'create_time']):
+            try:
+                cmdline = ' '.join(proc.info.get('cmdline', []) or [])
+                # Look for agent process - check multiple patterns
+                if any(keyword in cmdline.lower() for keyword in ['mike_agent_live_safe', 'mike_agent', 'agent_live']):
                     running = True
-                    deployment_info = f"Fly.io ({len(started_machines)} machine(s))"
-                    # Get last updated time
-                    if started_machines:
-                        last_updated = started_machines[0].get('LastUpdated', '')
-                        if last_updated:
-                            try:
-                                from dateutil import parser
-                                dt = parser.parse(last_updated)
-                                uptime = f"Since {dt.strftime('%Y-%m-%d %H:%M:%S')}"
-                            except:
-                                uptime = last_updated
-    except (ImportError, subprocess.TimeoutExpired, FileNotFoundError, ValueError, Exception) as e:
-        # Fallback to local process check
-        try:
-            import psutil
-            for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
-                try:
-                    cmdline = ' '.join(proc.info['cmdline'] or [])
-                    if 'mike_agent_live_safe.py' in cmdline:
-                        running = True
-                        deployment_info = "Local"
-                        # Calculate uptime from process start time
-                        try:
-                            create_time = datetime.fromtimestamp(proc.create_time())
+                    deployment_info = "Fly.io"
+                    # Calculate uptime from process start time
+                    try:
+                        create_time_val = proc.info.get('create_time')
+                        if create_time_val:
+                            create_time = datetime.fromtimestamp(create_time_val)
                             uptime_delta = datetime.now() - create_time
                             hours = int(uptime_delta.total_seconds() / 3600)
                             minutes = int((uptime_delta.total_seconds() % 3600) / 60)
                             uptime = f"{hours}h {minutes}m"
-                        except:
+                        else:
                             uptime = "Running"
-                        break
-                except (psutil.NoSuchProcess, psutil.AccessDenied, TypeError):
-                    pass
-        except ImportError:
-            # Final fallback: check for log file activity
-            log_file = Path("logs/mike_agent_safe_" + datetime.now().strftime('%Y%m%d') + ".log")
-            if log_file.exists():
-                # Check if log was updated in last 5 minutes
-                mtime = datetime.fromtimestamp(log_file.stat().st_mtime)
-                if (datetime.now() - mtime).total_seconds() < 300:
-                    running = True
-                    deployment_info = "Local (log-based)"
+                    except:
+                        uptime = "Running"
+                    break
+            except (psutil.NoSuchProcess, psutil.AccessDenied, TypeError, KeyError, AttributeError):
+                pass
+    except ImportError:
+        pass
+    
+    # Method 2: Check for recent log file activity (if process check didn't work)
+    if not running:
+        try:
+            # Check multiple possible log locations
+            log_paths = [
+                Path("/tmp/agent.log"),  # Agent logs to /tmp/agent.log
+                Path("logs/mike_agent_safe_" + datetime.now().strftime('%Y%m%d') + ".log"),
+                Path("agent.log"),
+                Path("logs/agent.log"),
+            ]
+            
+            for log_file in log_paths:
+                if log_file.exists():
+                    # Check if log was updated in last 5 minutes
+                    try:
+                        mtime = datetime.fromtimestamp(log_file.stat().st_mtime)
+                        age_seconds = (datetime.now() - mtime).total_seconds()
+                        if age_seconds < 300:  # Updated in last 5 minutes
+                            running = True
+                            deployment_info = "Fly.io (log-based)"
+                            age_minutes = int(age_seconds / 60)
+                            uptime = f"Log updated {age_minutes}m ago"
+                            break
+                    except (OSError, ValueError):
+                        continue
+        except Exception:
+            pass
+    
+    # Method 3: Check for health check file (if agent creates one)
+    if not running:
+        try:
+            health_file = Path("/tmp/agent_health.json")
+            if health_file.exists():
+                try:
+                    health_data = json.loads(health_file.read_text())
+                    if health_data.get('running', False):
+                        running = True
+                        deployment_info = "Fly.io (health check)"
+                        uptime = health_data.get('uptime', 'N/A')
+                except:
+                    # Check file modification time as fallback
+                    try:
+                        mtime = datetime.fromtimestamp(health_file.stat().st_mtime)
+                        age_seconds = (datetime.now() - mtime).total_seconds()
+                        if age_seconds < 300:  # Updated in last 5 minutes
+                            running = True
+                            deployment_info = "Fly.io (health check)"
+                            age_minutes = int(age_seconds / 60)
+                            uptime = f"Updated {age_minutes}m ago"
+                    except:
+                        pass
+        except Exception:
+            pass
+    
+    # Method 4: Try to check Fly.io status via API (only if running locally, not in container)
+    if not running:
+        try:
+            import subprocess
+            # Only try this if we're not in a Fly.io container (check for /app directory)
+            # In Fly.io, /app exists, so skip this check
+            if not Path("/app").exists():
+                result = subprocess.run(
+                    ['fly', 'status', '--app', 'mike-agent-project', '--json'],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if result.returncode == 0:
+                    status_data = json.loads(result.stdout)
+                    machines = status_data.get('Machines', [])
+                    if machines:
+                        started_machines = [m for m in machines if m.get('State') == 'started']
+                        if started_machines:
+                            running = True
+                            deployment_info = f"Fly.io ({len(started_machines)} machine(s))"
+                            uptime = "Remote"
+        except (ImportError, subprocess.TimeoutExpired, FileNotFoundError, ValueError, Exception):
+            pass
     
     return {
         'running': running,
         'uptime': uptime,
-        'deployment': deployment_info or 'Unknown',
+        'deployment': deployment_info or 'Fly.io',
         'last_update': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         'model': 'mike_23feature_model_final.zip',
         'model_path': 'models/mike_23feature_model_final.zip'
