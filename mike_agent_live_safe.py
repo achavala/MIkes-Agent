@@ -3593,7 +3593,16 @@ def run_safe_live_trading():
                 # ENHANCED LOGGING: Show why trades are/aren't happening
                 if action == 0:  # HOLD (canonical action 0)
                     if symbol_actions:
-                        actions_summary = ", ".join([f"{sym}:{act}({strength:.2f})" for sym, (act, _, strength) in symbol_actions.items()])
+                        # Handle both dict and tuple formats
+                        actions_list = []
+                        for sym, action_data in symbol_actions.items():
+                            if isinstance(action_data, dict):
+                                act = action_data.get('action', 0)
+                                strength = action_data.get('action_strength', 0.0)
+                            else:
+                                act, _, strength = action_data
+                            actions_list.append(f"{sym}:{act}({strength:.2f})")
+                        actions_summary = ", ".join(actions_list)
                         risk_mgr.log(f"🤔 Multi-Symbol RL: All HOLD | Actions: [{actions_summary}] | Open Positions: {len(risk_mgr.open_positions)}/{MAX_CONCURRENT} | Available: {available_symbols}", "INFO")
                     else:
                         risk_mgr.log(f"🤔 Multi-Symbol RL: HOLD (no available symbols) | Open Positions: {len(risk_mgr.open_positions)}/{MAX_CONCURRENT}", "INFO")
