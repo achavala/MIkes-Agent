@@ -1,99 +1,131 @@
 #!/usr/bin/env python3
 """
-Direct Telegram API test - shows detailed error messages
+Direct Telegram Test - Run this on Fly.io to test alerts
+Usage: fly ssh console --app mike-agent-project
+Then: python3 /app/test_telegram_direct.py
 """
 import os
-import requests
+import sys
 
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+# Add app directory to path
+sys.path.insert(0, '/app')
 
-print("=" * 60)
-print("🔍 TELEGRAM API DIRECT TEST")
-print("=" * 60)
+print("=" * 80)
+print("🔔 TELEGRAM ALERTS TEST")
+print("=" * 80)
 print()
 
-if not BOT_TOKEN:
-    print("❌ TELEGRAM_BOT_TOKEN not set")
-    exit(1)
+# Check environment variables
+bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+chat_id = os.getenv("TELEGRAM_CHAT_ID")
 
-if not CHAT_ID:
-    print("❌ TELEGRAM_CHAT_ID not set")
-    exit(1)
-
-print(f"✅ Bot Token: {BOT_TOKEN[:10]}...{BOT_TOKEN[-5:]}")
-print(f"✅ Chat ID: {CHAT_ID}")
+print("📋 Configuration Check:")
+print(f"  TELEGRAM_BOT_TOKEN: {'✅ Set' if bot_token else '❌ Not set'}")
+if bot_token:
+    print(f"    Token: {bot_token[:10]}...{bot_token[-5:] if len(bot_token) > 15 else '***'}")
+print(f"  TELEGRAM_CHAT_ID: {'✅ Set' if chat_id else '❌ Not set'}")
+if chat_id:
+    print(f"    Chat ID: {chat_id}")
 print()
 
-# Test 1: Verify bot token
-print("Test 1: Verifying bot token...")
+if not bot_token or not chat_id:
+    print("❌ Telegram secrets not configured!")
+    print()
+    print("To set secrets on Fly.io:")
+    print("  fly secrets set TELEGRAM_BOT_TOKEN=your_token --app mike-agent-project")
+    print("  fly secrets set TELEGRAM_CHAT_ID=your_chat_id --app mike-agent-project")
+    sys.exit(1)
+
+# Import Telegram module
 try:
-    response = requests.get(
-        f"https://api.telegram.org/bot{BOT_TOKEN}/getMe",
-        timeout=10
+    from utils.telegram_alerts import (
+        test_telegram_alert,
+        send_entry_alert,
+        send_exit_alert,
+        send_block_alert,
+        send_info
     )
-    if response.status_code == 200:
-        bot_info = response.json()
-        if bot_info.get('ok'):
-            print(f"✅ Bot verified: @{bot_info['result']['username']}")
-        else:
-            print(f"❌ Bot API error: {bot_info}")
-            exit(1)
-    else:
-        print(f"❌ HTTP {response.status_code}: {response.text}")
-        exit(1)
-except Exception as e:
-    print(f"❌ Error: {e}")
-    exit(1)
+    print("✅ Telegram module imported")
+except ImportError as e:
+    print(f"❌ Failed to import Telegram module: {e}")
+    sys.exit(1)
 
 print()
-
-# Test 2: Send message
-print("Test 2: Sending test message...")
-try:
-    response = requests.post(
-        f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-        json={
-            "chat_id": CHAT_ID,
-            "text": "🧪 Direct API test - if you see this, it works!",
-        },
-        timeout=10
-    )
-    
-    print(f"Status Code: {response.status_code}")
-    
-    if response.status_code == 200:
-        result = response.json()
-        if result.get('ok'):
-            print("✅ Message sent successfully!")
-            print(f"   Message ID: {result['result']['message_id']}")
-            print()
-            print("Check your Telegram - you should have received the message!")
-        else:
-            print(f"❌ API returned error: {result}")
-            exit(1)
-    else:
-        print(f"❌ HTTP {response.status_code}")
-        print(f"Response: {response.text}")
-        exit(1)
-        
-except requests.exceptions.HTTPError as e:
-    print(f"❌ HTTP Error: {e}")
-    if hasattr(e, 'response') and e.response:
-        print(f"   Status: {e.response.status_code}")
-        print(f"   Response: {e.response.text}")
-    exit(1)
-except requests.exceptions.RequestException as e:
-    print(f"❌ Network Error: {e}")
-    exit(1)
-except Exception as e:
-    print(f"❌ Unexpected Error: {e}")
-    import traceback
-    traceback.print_exc()
-    exit(1)
+print("-" * 80)
+print("🧪 TEST 1: Basic Test Alert")
+print("-" * 80)
+result1 = test_telegram_alert()
+if result1:
+    print("✅ Test alert sent! Check your Telegram.")
+else:
+    print("❌ Test alert failed")
 
 print()
-print("=" * 60)
-print("✅ ALL TESTS PASSED")
-print("=" * 60)
+print("-" * 80)
+print("🧪 TEST 2: Entry Alert")
+print("-" * 80)
+result2 = send_entry_alert(
+    symbol="SPY241202C00450000",
+    side="CALL",
+    strike=450.00,
+    expiry="0DTE",
+    fill_price=0.45,
+    qty=5,
+    confidence=0.60,
+    action_source="RL+Ensemble"
+)
+if result2:
+    print("✅ Entry alert sent!")
+else:
+    print("⚠️ Entry alert not sent (rate limited or error)")
 
+print()
+print("-" * 80)
+print("🧪 TEST 3: Exit Alert")
+print("-" * 80)
+result3 = send_exit_alert(
+    symbol="SPY241202C00450000",
+    exit_reason="Take Profit 1",
+    entry_price=0.45,
+    exit_price=0.58,
+    pnl_pct=28.89,
+    qty=5,
+    pnl_dollar=65.00
+)
+if result3:
+    print("✅ Exit alert sent!")
+else:
+    print("⚠️ Exit alert not sent (rate limited or error)")
+
+print()
+print("-" * 80)
+print("🧪 TEST 4: Block Alert")
+print("-" * 80)
+result4 = send_block_alert(
+    symbol="SPY",
+    block_reason="Test: Confidence too low (strength=0.521 < 0.600)"
+)
+if result4:
+    print("✅ Block alert sent!")
+else:
+    print("⚠️ Block alert not sent (rate limited or error)")
+
+print()
+print("-" * 80)
+print("🧪 TEST 5: Info Alert")
+print("-" * 80)
+result5 = send_info("Test info alert from Fly.io - Telegram alerts are working! ✅")
+if result5:
+    print("✅ Info alert sent!")
+else:
+    print("⚠️ Info alert not sent (rate limited or error)")
+
+print()
+print("=" * 80)
+if result1:
+    print("✅ TELEGRAM IS WORKING!")
+    print("Check your Telegram - you should have received test alerts!")
+else:
+    print("❌ TELEGRAM TEST FAILED")
+    print("Check the error messages above for details")
+print("=" * 80)

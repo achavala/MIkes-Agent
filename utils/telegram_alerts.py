@@ -32,9 +32,9 @@ _LAST_SENT: dict[str, float] = {}
 
 # Rate limit windows (seconds)
 RATE_LIMITS = {
-    "ENTRY": 300,      # 5 minutes between entry alerts for same symbol
-    "EXIT": 60,        # 1 minute between exit alerts for same symbol
-    "BLOCK": 600,      # 10 minutes between block alerts for same symbol
+    "ENTRY": 30,       # 30 seconds between entry alerts for same symbol (reduced from 5 min)
+    "EXIT": 30,        # 30 seconds between exit alerts for same symbol (reduced from 1 min)
+    "BLOCK": 300,      # 5 minutes between block alerts for same symbol (reduced from 10 min)
     "ERROR": 300,      # 5 minutes between error alerts
     "INFO": 60,        # 1 minute between info alerts
     "PNL": 3600,       # 1 hour between PnL summaries
@@ -101,7 +101,8 @@ def send_telegram(message: str, level: str = "INFO", rate_limit_key: Optional[st
     # Rate limiting: check if we should send this alert
     key = rate_limit_key if rate_limit_key else level
     if not _should_send(key, level):
-        return False  # Rate limited - silently skip
+        print(f"⚠️ Telegram alert rate limited (level: {level}, key: {key}) - not sending")
+        return False  # Rate limited - log it
     
     # Get emoji for level
     emoji = EMOJI_MAP.get(level, "📩")
@@ -156,7 +157,8 @@ def send_entry_alert(
     confidence: Optional[float] = None,
     action_source: Optional[str] = None
 ) -> bool:
-    """Send trade entry alert (rate limited: 5 min per symbol)"""
+    """Send trade entry alert (rate limited: 30 seconds per symbol)"""
+    print(f"📤 Attempting to send entry alert for {symbol} ({side})...")
     message = f"""
 ENTERED {symbol}
 Type: {side.upper()}
@@ -172,7 +174,12 @@ Size: {qty} contracts
     
     # Rate limit by symbol to prevent spam
     rate_key = f"ENTRY_{symbol}"
-    return send_telegram(message.strip(), level="ENTRY", rate_limit_key=rate_key)
+    result = send_telegram(message.strip(), level="ENTRY", rate_limit_key=rate_key)
+    if result:
+        print(f"✅ Entry alert sent successfully for {symbol}")
+    else:
+        print(f"❌ Entry alert failed for {symbol} (check rate limiting or API error above)")
+    return result
 
 
 def send_exit_alert(

@@ -22,6 +22,14 @@ import pandas as pd
 import yfinance as yf  # Keep for VIX fallback
 from massive_api_client import MassiveAPIClient
 
+# Ensure /app is in Python path for imports (Fly.io deployment)
+if '/app' not in sys.path:
+    sys.path.insert(0, '/app')
+# Also ensure current directory is in path
+current_dir = os.getcwd()
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
+
 # Set environment variables BEFORE importing torch/gym
 os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
 os.environ['PYTORCH_MPS_HIGH_WATERMARK_RATIO'] = '0.0'
@@ -204,7 +212,7 @@ VIX_KILL = 28  # No trades if VIX > 28
 IVR_MIN = 30  # Minimum IV Rank (0-100)
 # Entry time filter (disabled per user request)
 NO_TRADE_AFTER = None  # type: Optional[str]  # No time restriction - trading allowed all day
-MIN_ACTION_STRENGTH_THRESHOLD = 0.65  # Minimum confidence (0.65 = 65%) required to execute trades (prevents weak signals)
+MIN_ACTION_STRENGTH_THRESHOLD = 0.52  # Minimum confidence (0.52 = 52%) required to execute trades (adjusted to allow model's typical confidence range of 0.52-0.65)
 MAX_DRAWDOWN = 0.30  # Full shutdown if -30% from peak
 MAX_NOTIONAL = 50000  # Max $50k notional per order
 DUPLICATE_ORDER_WINDOW = 300  # 5 minutes in seconds (per symbol)
@@ -893,11 +901,15 @@ def choose_best_symbol_for_trade(iteration: int, symbol_actions: dict, target_ac
     Returns:
         Selected symbol or None if no eligible symbol
     """
-    symbols = TRADING_SYMBOLS  # ['SPY', 'QQQ', 'SPX']
+    symbols = TRADING_SYMBOLS  # ['SPY', 'QQQ', 'IWM']
     
-    # Rotation for fairness
-    rot = iteration % len(symbols)
-    priority_order = symbols[rot:] + symbols[:rot]
+    # ⭐ PRIORITY FIX: Always prioritize SPY first (most profitable based on user's strategy)
+    # Then QQQ, then IWM
+    # Only use rotation if SPY is not available (has position, cooldown, etc.)
+    priority_order = ['SPY', 'QQQ', 'IWM']  # Fixed priority: SPY first
+    
+    # If SPY is not in candidates after filtering, rotation can help with QQQ/IWM
+    # But SPY should always be checked first
     
     # Filter candidates: must pass all checks
     candidates = []
@@ -1427,9 +1439,51 @@ def get_option_symbol(underlying: str, strike: float, option_type: str) -> str:
     type_str = 'C' if option_type == 'call' else 'P'
     return f"{underlying}{date_str}{type_str}{strike_str}"
 
-def find_atm_strike(price: float) -> float:
-    """Find nearest ATM strike"""
-    return round(price)
+def find_atm_strike(price: float, option_type: str = 'call', target_delta: float = 0.50) -> float:
+    """
+    Find optimal strike for 0DTE options trading
+    
+    Strategy (based on successful manual trades):
+    - CALLS: Strike = current_price + $1-3 (slightly OTM, ~$0.50 premium)
+    - PUTS: Strike = current_price - $1-5 (slightly OTM, ~$0.40-$0.60 premium)
+    
+    Args:
+        price: Current underlying price
+        option_type: 'call' or 'put'
+        target_delta: Target delta (0.50 = ATM, 0.30-0.40 = slightly OTM)
+    
+    Returns:
+        Strike price rounded to nearest $0.50 or $1.00 increment
+    """
+    # For 0DTE options, use slightly OTM strikes (matches successful strategy)
+    if option_type.lower() == 'call':
+        # CALLS: Strike slightly above current price ($1-3 OTM)
+        # This gives ~$0.50 premium and good movement potential
+        strike_offset = 2.0  # $2 above price (slightly OTM)
+        strike = price + strike_offset
+    else:  # put
+        # PUTS: Strike slightly below current price ($1-5 OTM)
+        # This gives ~$0.40-$0.60 premium and good movement potential
+        strike_offset = -3.0  # $3 below price (slightly OTM)
+        strike = price + strike_offset
+    
+    # Round to nearest $0.50 increment (standard option strike spacing)
+    # For prices > $100, use $1.00 increments; for < $100, use $0.50 increments
+    if price >= 100:
+        strike = round(strike)  # Round to nearest $1.00
+    else:
+        strike = round(strike * 2) / 2  # Round to nearest $0.50
+    
+    # Validation: Ensure strike is within reasonable range
+    # Reject strikes that are >$10 away from current price (too far OTM)
+    if abs(strike - price) > 10:
+        # Fallback to ATM if calculated strike is too far
+        if price >= 100:
+            strike = round(price)
+        else:
+            strike = round(price * 2) / 2
+    
+    return strike
 
 def estimate_premium(price: float, strike: float, option_type: str) -> float:
     """Estimate option premium using Black-Scholes with fallback"""
@@ -2846,6 +2900,26 @@ def run_safe_live_trading():
     time = time_module
     del time_module
     
+    # Send test Telegram alert on startup to verify alerts are working
+    if TELEGRAM_AVAILABLE:
+        try:
+            from utils.telegram_alerts import send_info, is_configured
+            if is_configured():
+                startup_msg = (
+                    "🚀 Mike Agent Started\n\n"
+                    "Agent is now running and monitoring the market.\n"
+                    "You will receive alerts for:\n"
+                    "• Trade entries\n"
+                    "• Trade exits (TP/SL)\n"
+                    "• Trade blocks\n"
+                    "• Critical errors\n\n"
+                    "If you received this message, Telegram alerts are working! ✅"
+                )
+                send_info(startup_msg)
+                print("📱 Startup Telegram alert sent")
+        except Exception as e:
+            print(f"⚠️ Failed to send startup Telegram alert: {e}")
+    
     print("=" * 70)
     print("MIKE AGENT v3 – RL EDITION – LIVE WITH 10X RISK SAFEGUARDS")
     print("=" * 70)
@@ -3542,7 +3616,14 @@ def run_safe_live_trading():
                         # Check minimum confidence threshold before executing
                         selected_strength = symbol_actions.get(current_symbol, (None, None, 0.0))[2] if current_symbol in symbol_actions else 0.0
                         if selected_strength < MIN_ACTION_STRENGTH_THRESHOLD:
-                            risk_mgr.log(f"⛔ BLOCKED: Selected symbol {current_symbol} confidence too low (strength={selected_strength:.3f} < {MIN_ACTION_STRENGTH_THRESHOLD:.3f}) | Skipping trade", "INFO")
+                            block_reason = f"Confidence too low (strength={selected_strength:.3f} < {MIN_ACTION_STRENGTH_THRESHOLD:.3f})"
+                            risk_mgr.log(f"⛔ BLOCKED: Selected symbol {current_symbol} {block_reason} | Skipping trade", "INFO")
+                            # Send Telegram block alert for confidence threshold blocks
+                            if TELEGRAM_AVAILABLE:
+                                try:
+                                    send_block_alert(symbol=current_symbol, block_reason=block_reason)
+                                except Exception:
+                                    pass  # Never block trading
                             time.sleep(10)
                             continue
                         # current_symbol already validated and selected by choose_best_symbol_for_trade
@@ -3559,8 +3640,12 @@ def run_safe_live_trading():
                     if symbol_price is None:
                         symbol_price = current_price  # Fallback to SPY
                     
-                    strike = find_atm_strike(symbol_price)
+                    strike = find_atm_strike(symbol_price, option_type='call')
                     symbol = get_option_symbol(current_symbol, strike, 'call')
+                    
+                    # Validate strike is reasonable (within $5 of current price)
+                    if abs(strike - symbol_price) > 5:
+                        risk_mgr.log(f"⚠️ WARNING: Strike ${strike:.2f} is ${abs(strike - symbol_price):.2f} away from price ${symbol_price:.2f} - may be too far OTM", "WARNING")
                     
                     # Log symbol selection for debugging
                     risk_mgr.log(f"📊 Selected symbol for CALL: {current_symbol} @ ${symbol_price:.2f} | Strike: ${strike:.2f} | Option: {symbol}", "INFO")
@@ -3799,7 +3884,14 @@ def run_safe_live_trading():
                         # Check minimum confidence threshold before executing
                         selected_strength = symbol_actions.get(current_symbol, (None, None, 0.0))[2] if current_symbol in symbol_actions else 0.0
                         if selected_strength < MIN_ACTION_STRENGTH_THRESHOLD:
-                            risk_mgr.log(f"⛔ BLOCKED: Selected symbol {current_symbol} confidence too low (strength={selected_strength:.3f} < {MIN_ACTION_STRENGTH_THRESHOLD:.3f}) | Skipping trade", "INFO")
+                            block_reason = f"Confidence too low (strength={selected_strength:.3f} < {MIN_ACTION_STRENGTH_THRESHOLD:.3f})"
+                            risk_mgr.log(f"⛔ BLOCKED: Selected symbol {current_symbol} {block_reason} | Skipping trade", "INFO")
+                            # Send Telegram block alert for confidence threshold blocks
+                            if TELEGRAM_AVAILABLE:
+                                try:
+                                    send_block_alert(symbol=current_symbol, block_reason=block_reason)
+                                except Exception:
+                                    pass  # Never block trading
                             time.sleep(10)
                             continue
                         # current_symbol already validated and selected by choose_best_symbol_for_trade
@@ -3824,8 +3916,12 @@ def run_safe_live_trading():
                         if symbol_price == current_price and current_symbol != 'SPY':
                             risk_mgr.log(f"⚠️ Could not get price for {current_symbol}, using SPY price as fallback", "WARNING")
                     
-                    strike = find_atm_strike(symbol_price)
+                    strike = find_atm_strike(symbol_price, option_type='put')
                     symbol = get_option_symbol(current_symbol, strike, 'put')
+                    
+                    # Validate strike is reasonable (within $5 of current price)
+                    if abs(strike - symbol_price) > 5:
+                        risk_mgr.log(f"⚠️ WARNING: Strike ${strike:.2f} is ${abs(strike - symbol_price):.2f} away from price ${symbol_price:.2f} - may be too far OTM", "WARNING")
                     
                     # Log symbol selection for debugging
                     risk_mgr.log(f"📊 Selected symbol for PUT: {current_symbol} @ ${symbol_price:.2f} | Strike: ${strike:.2f} | Option: {symbol}", "INFO")
