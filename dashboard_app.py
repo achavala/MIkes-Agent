@@ -935,7 +935,6 @@ def get_agent_status():
             timeout=5
         )
         if result.returncode == 0:
-            import json
             status_data = json.loads(result.stdout)
             # Check if machines are in "started" state
             machines = status_data.get('Machines', [])
@@ -954,7 +953,7 @@ def get_agent_status():
                                 uptime = f"Since {dt.strftime('%Y-%m-%d %H:%M:%S')}"
                             except:
                                 uptime = last_updated
-    except (ImportError, subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError, Exception) as e:
+    except (ImportError, subprocess.TimeoutExpired, FileNotFoundError, ValueError, Exception) as e:
         # Fallback to local process check
         try:
             import psutil
