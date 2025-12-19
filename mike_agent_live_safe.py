@@ -1406,7 +1406,7 @@ def load_rl_model():
                 print("  Method 1: PPO.load with custom_objects={}, print_system_info=False")
                 model = PPO.load(MODEL_PATH, custom_objects={}, print_system_info=False)
                 print("✓ Model loaded successfully (standard PPO)")
-    return model
+                return model
             except Exception as e1:
                 # Method 2: Try with explicit CPU device
                 try:
