@@ -1369,18 +1369,18 @@ def load_rl_model():
     
     # Try RecurrentPPO first (LSTM models) - SKIP for historical models
     if not is_historical_model:
+    try:
+        from sb3_contrib import RecurrentPPO
         try:
-            from sb3_contrib import RecurrentPPO
-            try:
-                model = RecurrentPPO.load(MODEL_PATH)
-                print("✓ Model loaded successfully (RecurrentPPO with LSTM temporal intelligence)")
-                return model
-            except Exception as e:
-                # Not a RecurrentPPO model, continue to other options
-                pass
-        except ImportError:
-            # RecurrentPPO not available
+            model = RecurrentPPO.load(MODEL_PATH)
+            print("✓ Model loaded successfully (RecurrentPPO with LSTM temporal intelligence)")
+            return model
+        except Exception as e:
+            # Not a RecurrentPPO model, continue to other options
             pass
+    except ImportError:
+        # RecurrentPPO not available
+        pass
     
     # Try MaskablePPO (for action masking support) - SKIP for historical models
     if MASKABLE_PPO_AVAILABLE and not is_historical_model:
