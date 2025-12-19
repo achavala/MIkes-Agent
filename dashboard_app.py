@@ -920,34 +920,79 @@ def get_active_positions():
         return pd.DataFrame()
 
 def get_agent_status():
-    """Get agent status"""
-    # Check if agent process is running
+    """Get agent status - checks both local and Fly.io deployment"""
     running = False
+    uptime = 'N/A'
+    deployment_info = None
+    
+    # First, try to check Fly.io status (for deployed agents)
     try:
-        import psutil
-        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
-            try:
-                cmdline = ' '.join(proc.info['cmdline'] or [])
-                if 'mike_agent_live_safe.py' in cmdline:
+        import subprocess
+        result = subprocess.run(
+            ['fly', 'status', '--app', 'mike-agent-project', '--json'],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode == 0:
+            import json
+            status_data = json.loads(result.stdout)
+            # Check if machines are in "started" state
+            machines = status_data.get('Machines', [])
+            if machines:
+                started_machines = [m for m in machines if m.get('State') == 'started']
+                if started_machines:
                     running = True
-                    break
-            except (psutil.NoSuchProcess, psutil.AccessDenied, TypeError):
-                pass
-    except ImportError:
-        # Fallback: check for log file activity
-        log_file = Path("logs/mike_agent_safe_" + datetime.now().strftime('%Y%m%d') + ".log")
-        if log_file.exists():
-            # Check if log was updated in last 5 minutes
-            mtime = datetime.fromtimestamp(log_file.stat().st_mtime)
-            if (datetime.now() - mtime).total_seconds() < 300:
-                running = True
+                    deployment_info = f"Fly.io ({len(started_machines)} machine(s))"
+                    # Get last updated time
+                    if started_machines:
+                        last_updated = started_machines[0].get('LastUpdated', '')
+                        if last_updated:
+                            try:
+                                from dateutil import parser
+                                dt = parser.parse(last_updated)
+                                uptime = f"Since {dt.strftime('%Y-%m-%d %H:%M:%S')}"
+                            except:
+                                uptime = last_updated
+    except (ImportError, subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError, Exception) as e:
+        # Fallback to local process check
+        try:
+            import psutil
+            for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+                try:
+                    cmdline = ' '.join(proc.info['cmdline'] or [])
+                    if 'mike_agent_live_safe.py' in cmdline:
+                        running = True
+                        deployment_info = "Local"
+                        # Calculate uptime from process start time
+                        try:
+                            create_time = datetime.fromtimestamp(proc.create_time())
+                            uptime_delta = datetime.now() - create_time
+                            hours = int(uptime_delta.total_seconds() / 3600)
+                            minutes = int((uptime_delta.total_seconds() % 3600) / 60)
+                            uptime = f"{hours}h {minutes}m"
+                        except:
+                            uptime = "Running"
+                        break
+                except (psutil.NoSuchProcess, psutil.AccessDenied, TypeError):
+                    pass
+        except ImportError:
+            # Final fallback: check for log file activity
+            log_file = Path("logs/mike_agent_safe_" + datetime.now().strftime('%Y%m%d') + ".log")
+            if log_file.exists():
+                # Check if log was updated in last 5 minutes
+                mtime = datetime.fromtimestamp(log_file.stat().st_mtime)
+                if (datetime.now() - mtime).total_seconds() < 300:
+                    running = True
+                    deployment_info = "Local (log-based)"
     
     return {
         'running': running,
-        'uptime': 'N/A',
+        'uptime': uptime,
+        'deployment': deployment_info or 'Unknown',
         'last_update': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        'model': 'mike_historical_model.zip',
-        'model_path': 'models/mike_historical_model.zip'
+        'model': 'mike_23feature_model_final.zip',
+        'model_path': 'models/mike_23feature_model_final.zip'
     }
 
 def get_performance_stats(period):
