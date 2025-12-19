@@ -1369,18 +1369,18 @@ def load_rl_model():
     
     # Try RecurrentPPO first (LSTM models) - SKIP for historical models
     if not is_historical_model:
+    try:
+        from sb3_contrib import RecurrentPPO
         try:
-            from sb3_contrib import RecurrentPPO
-            try:
-                model = RecurrentPPO.load(MODEL_PATH)
-                print("✓ Model loaded successfully (RecurrentPPO with LSTM temporal intelligence)")
-                return model
-            except Exception as e:
-                # Not a RecurrentPPO model, continue to other options
-                pass
-        except ImportError:
-            # RecurrentPPO not available
+            model = RecurrentPPO.load(MODEL_PATH)
+            print("✓ Model loaded successfully (RecurrentPPO with LSTM temporal intelligence)")
+            return model
+        except Exception as e:
+            # Not a RecurrentPPO model, continue to other options
             pass
+    except ImportError:
+        # RecurrentPPO not available
+        pass
     
     # Try MaskablePPO (for action masking support) - SKIP for historical models
     if MASKABLE_PPO_AVAILABLE and not is_historical_model:
@@ -1406,7 +1406,7 @@ def load_rl_model():
                 print("  Method 1: PPO.load with custom_objects={}, print_system_info=False")
                 model = PPO.load(MODEL_PATH, custom_objects={}, print_system_info=False)
                 print("✓ Model loaded successfully (standard PPO)")
-                return model
+    return model
             except Exception as e1:
                 # Method 2: Try with explicit CPU device
                 try:
@@ -1496,23 +1496,23 @@ def estimate_premium(price: float, strike: float, option_type: str) -> float:
     """Estimate option premium using Black-Scholes with fallback"""
     # Try to use scipy for accurate Black-Scholes
     try:
-        from scipy.stats import norm
-        
-        T = config.T if hasattr(config, 'T') else 1/365
-        r = config.R if hasattr(config, 'R') else 0.04
-        sigma = config.DEFAULT_SIGMA if hasattr(config, 'DEFAULT_SIGMA') else 0.20
-        
-        if T <= 0:
-            return max(0.01, abs(price - strike))
-        
-        d1 = (np.log(price / strike) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
-        d2 = d1 - sigma * np.sqrt(T)
-        
-        if option_type == 'call':
-            premium = price * norm.cdf(d1) - strike * np.exp(-r * T) * norm.cdf(d2)
-        else:  # put
-            premium = strike * np.exp(-r * T) * norm.cdf(-d2) - price * norm.cdf(-d1)
-        
+    from scipy.stats import norm
+    
+    T = config.T if hasattr(config, 'T') else 1/365
+    r = config.R if hasattr(config, 'R') else 0.04
+    sigma = config.DEFAULT_SIGMA if hasattr(config, 'DEFAULT_SIGMA') else 0.20
+    
+    if T <= 0:
+        return max(0.01, abs(price - strike))
+    
+    d1 = (np.log(price / strike) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
+    d2 = d1 - sigma * np.sqrt(T)
+    
+    if option_type == 'call':
+        premium = price * norm.cdf(d1) - strike * np.exp(-r * T) * norm.cdf(d2)
+    else:  # put
+        premium = strike * np.exp(-r * T) * norm.cdf(-d2) - price * norm.cdf(-d1)
+    
         return max(0.01, premium)
     except (ImportError, ModuleNotFoundError, AttributeError):
         # Fallback: Simple intrinsic + time value estimation (no scipy required)
@@ -3586,14 +3586,15 @@ def run_safe_live_trading():
                 elif symbol_actions:
                     # Find first symbol with BUY signal (BUY CALL or BUY PUT)
                     for sym, action_data in symbol_actions.items():
-                    # Handle both old format (tuple) and new format (dict with ta_result)
-                    if isinstance(action_data, dict):
-                        action = action_data.get('action', 0)
-                        source = action_data.get('action_source', 'unknown')
-                        strength = action_data.get('action_strength', 0.0)
-                    else:
-                        # Old format: (action, source, strength)
-                        action, source, strength = action_data
+                        # Handle both old format (tuple) and new format (dict with ta_result)
+                        if isinstance(action_data, dict):
+                            action = action_data.get('action', 0)
+                            source = action_data.get('action_source', 'unknown')
+                            strength = action_data.get('action_strength', 0.0)
+                        else:
+                            # Old format: (action, source, strength)
+                            action, source, strength = action_data
+                        
                         if action in [1, 2]:  # BUY CALL (1) or BUY PUT (2) - using canonical action codes
                             global_action = action
                             global_action_source = f"{source}_{sym}"
