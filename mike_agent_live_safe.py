@@ -3154,6 +3154,63 @@ def run_safe_live_trading():
                             risk_mgr.log(f"⚠️ {sym}: Insufficient data ({len(sym_hist)} < {LOOKBACK} bars), skipping RL inference", "WARNING")
                             continue
                         
+                        # ========== TECHNICAL ANALYSIS (MIKE'S PATTERN RECOGNITION) ==========
+                        ta_result = None
+                        ta_confidence_boost = 0.0
+                        ta_strike_suggestion = None
+                        ta_pattern_detected = False
+                        
+                        try:
+                            from technical_analysis_engine import TechnicalAnalysisEngine
+                            
+                            # Initialize TA engine if not already done
+                            if not hasattr(risk_mgr, 'ta_engine'):
+                                risk_mgr.ta_engine = TechnicalAnalysisEngine(lookback_bars=50)
+                            
+                            # Get current price for TA
+                            current_sym_price = get_current_price(sym)
+                            if current_sym_price is None:
+                                current_sym_price = sym_hist['close'].iloc[-1]
+                            
+                            # Run technical analysis
+                            ta_result = risk_mgr.ta_engine.analyze_symbol(
+                                data=sym_hist,
+                                symbol=sym,
+                                current_price=current_sym_price
+                            )
+                            
+                            # Extract TA insights
+                            if ta_result and ta_result.get('best_pattern'):
+                                ta_pattern_detected = True
+                                best_pattern = ta_result['best_pattern']
+                                ta_confidence_boost = ta_result.get('confidence_boost', 0.0)
+                                ta_strike_suggestion = ta_result.get('strike_suggestion')
+                                
+                                # Log pattern detection
+                                risk_mgr.log(
+                                    f"🎯 {sym} TA Pattern: {best_pattern['pattern_type']} ({best_pattern['direction']}) | "
+                                    f"Confidence: {best_pattern['confidence']:.2f} | "
+                                    f"Boost: +{ta_confidence_boost:.3f} | "
+                                    f"Reason: {best_pattern.get('reason', 'N/A')}",
+                                    "INFO"
+                                )
+                                
+                                # Log targets if available
+                                if ta_result.get('targets'):
+                                    targets = ta_result['targets']
+                                    risk_mgr.log(
+                                        f"🎯 {sym} TA Targets: ${targets.get('target1', 0):.2f} / "
+                                        f"${targets.get('target2', 0):.2f} | "
+                                        f"Strike Suggestion: ${ta_strike_suggestion:.2f}",
+                                        "INFO"
+                                    )
+                        except ImportError:
+                            # TA engine not available, continue without it
+                            pass
+                        except Exception as e:
+                            risk_mgr.log(f"⚠️ {sym} TA analysis error: {e}", "WARNING")
+                            pass  # Don't block trading if TA fails
+                        
                         # Prepare observation for THIS symbol
                         obs = prepare_observation(sym_hist, risk_mgr, symbol=sym)
                         
@@ -3417,6 +3474,19 @@ def run_safe_live_trading():
                         action = final_action
                         action_strength = final_confidence
                         
+                        # ========== BOOST CONFIDENCE WITH TECHNICAL ANALYSIS ==========
+                        if ta_pattern_detected and ta_confidence_boost > 0:
+                            # Boost confidence based on TA pattern
+                            base_confidence = action_strength
+                            boosted_confidence = min(0.95, base_confidence + ta_confidence_boost)
+                            action_strength = boosted_confidence
+                            
+                            risk_mgr.log(
+                                f"🚀 {sym} Confidence Boost: {base_confidence:.3f} → {boosted_confidence:.3f} "
+                                f"(+{ta_confidence_boost:.3f} from TA pattern: {ta_result['best_pattern']['pattern_type']})",
+                                "INFO"
+                            )
+                        
                         # If we're FLAT and the model keeps outputting TRIM/EXIT, resample stochastically.
                         # This preserves safety (we still only enter on BUY actions) while avoiding deadlock.
                         resampled = False
@@ -3475,7 +3545,8 @@ def run_safe_live_trading():
                             action_strength = final_confidence
                         
                         action = int(action)
-                        symbol_actions[sym] = (action, action_source, action_strength)
+                        # Store per-symbol action with confidence and TA result
+                        symbol_actions[sym] = (action, action_source, action_strength, ta_result)
                         
                         # Log per-symbol RL decision (using canonical action mapping)
                         # Show original action if it was remapped/masked
@@ -3502,7 +3573,15 @@ def run_safe_live_trading():
                     global_action_source = "GAP"
                 elif symbol_actions:
                     # Find first symbol with BUY signal (BUY CALL or BUY PUT)
-                    for sym, (action, source, strength) in symbol_actions.items():
+                    for sym, action_data in symbol_actions.items():
+                    # Handle both old format (tuple) and new format (dict with ta_result)
+                    if isinstance(action_data, dict):
+                        action = action_data.get('action', 0)
+                        source = action_data.get('action_source', 'unknown')
+                        strength = action_data.get('action_strength', 0.0)
+                    else:
+                        # Old format: (action, source, strength)
+                        action, source, strength = action_data
                         if action in [1, 2]:  # BUY CALL (1) or BUY PUT (2) - using canonical action codes
                             global_action = action
                             global_action_source = f"{source}_{sym}"
@@ -3640,7 +3719,31 @@ def run_safe_live_trading():
                     if symbol_price is None:
                         symbol_price = current_price  # Fallback to SPY
                     
-                    strike = find_atm_strike(symbol_price, option_type='call')
+                    # ========== USE TA-BASED STRIKE IF AVAILABLE ==========
+                    # Check if we have TA analysis for this symbol
+                    ta_strike = None
+                    if current_symbol in symbol_actions:
+                        action_info = symbol_actions[current_symbol]
+                        # Check if TA result was stored (4th element if exists)
+                        if len(action_info) >= 4 and action_info[3] is not None:
+                            ta_result_call = action_info[3]
+                            if ta_result_call and ta_result_call.get('strike_suggestion'):
+                                ta_strike = ta_result_call['strike_suggestion']
+                    
+                    # Use TA-based strike if available, otherwise use fixed offset
+                    if ta_strike and ta_strike > 0:
+                        strike = ta_strike
+                        risk_mgr.log(
+                            f"🎯 {current_symbol} Using TA-based strike: ${strike:.2f}",
+                            "INFO"
+                        )
+                    else:
+                        strike = find_atm_strike(symbol_price, option_type='call')
+                        risk_mgr.log(
+                            f"📊 {current_symbol} Using fixed-offset strike: ${strike:.2f} (price + $2)",
+                            "INFO"
+                        )
+                    
                     symbol = get_option_symbol(current_symbol, strike, 'call')
                     
                     # Validate strike is reasonable (within $5 of current price)
@@ -3916,7 +4019,31 @@ def run_safe_live_trading():
                         if symbol_price == current_price and current_symbol != 'SPY':
                             risk_mgr.log(f"⚠️ Could not get price for {current_symbol}, using SPY price as fallback", "WARNING")
                     
-                    strike = find_atm_strike(symbol_price, option_type='put')
+                    # ========== USE TA-BASED STRIKE IF AVAILABLE ==========
+                    # Check if we have TA analysis for this symbol
+                    ta_strike = None
+                    if current_symbol in symbol_actions:
+                        action_info = symbol_actions[current_symbol]
+                        # Check if TA result was stored (4th element if exists)
+                        if len(action_info) >= 4 and action_info[3] is not None:
+                            ta_result_put = action_info[3]
+                            if ta_result_put and ta_result_put.get('strike_suggestion'):
+                                ta_strike = ta_result_put['strike_suggestion']
+                    
+                    # Use TA-based strike if available, otherwise use fixed offset
+                    if ta_strike and ta_strike > 0:
+                        strike = ta_strike
+                        risk_mgr.log(
+                            f"🎯 {current_symbol} Using TA-based strike: ${strike:.2f}",
+                            "INFO"
+                        )
+                    else:
+                        strike = find_atm_strike(symbol_price, option_type='put')
+                        risk_mgr.log(
+                            f"📊 {current_symbol} Using fixed-offset strike: ${strike:.2f} (price - $3)",
+                            "INFO"
+                        )
+                    
                     symbol = get_option_symbol(current_symbol, strike, 'put')
                     
                     # Validate strike is reasonable (within $5 of current price)
