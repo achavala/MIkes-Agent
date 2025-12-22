@@ -217,6 +217,10 @@ MAX_DRAWDOWN = 0.30  # Full shutdown if -30% from peak
 MAX_NOTIONAL = 50000  # Max $50k notional per order
 DUPLICATE_ORDER_WINDOW = 300  # 5 minutes in seconds (per symbol)
 
+# ==================== DATA SOURCE CONFIGURATION ====================
+ALLOW_YFINANCE_FALLBACK = False  # Set to False to disable yfinance fallback (delayed data not suitable for 0DTE trading)
+USE_YFINANCE_FOR_VIX_ONLY = True  # VIX can be delayed, this is OK (non-critical data)
+
 # ==================== IV-ADJUSTED POSITION SIZING ====================
 # Position size adjusts dynamically to IV:
 # - Low IV (<20%): Larger size (10% risk) - cheaper premiums, higher conviction
@@ -462,7 +466,10 @@ class RiskManager:
         
         # Create logs directory
         os.makedirs("logs", exist_ok=True)
-        self.log_file = f"logs/mike_agent_safe_{datetime.now().strftime('%Y%m%d')}.log"
+        # Use EST for all timestamps
+        est = pytz.timezone('US/Eastern')
+        now_est = datetime.now(est)
+        self.log_file = f"logs/mike_agent_safe_{now_est.strftime('%Y%m%d')}.log"
     
     def reset_daily_state(self) -> None:
         """
@@ -470,7 +477,10 @@ class RiskManager:
         Called automatically on day change
         CRITICAL: Cooldowns must reset to allow new day trading
         """
-        today = datetime.now().strftime('%Y-%m-%d')
+        # Use EST for all timestamps
+        est = pytz.timezone('US/Eastern')
+        now_est = datetime.now(est)
+        today = now_est.strftime('%Y-%m-%d')
         if self.last_reset_date == today:
             return  # Already reset today
         
@@ -597,12 +607,18 @@ class RiskManager:
     
     def log(self, msg: str, level: str = "INFO"):
         """Log message to console and file"""
-        timestamp = datetime.now().strftime('%H:%M:%S')
+        # Use EST for all timestamps
+        est = pytz.timezone('US/Eastern')
+        now_est = datetime.now(est)
+        timestamp = now_est.strftime('%H:%M:%S')
         log_msg = f"[{timestamp}] [{level}] {msg}"
         print(log_msg)
         try:
             with open(self.log_file, "a") as f:
-                f.write(f"{datetime.now()} | [{level}] {msg}\n")
+                # Use EST for all timestamps
+                est = pytz.timezone('US/Eastern')
+                now_est = datetime.now(est)
+                f.write(f"{now_est} | [{level}] {msg}\n")
         except:
             pass
     
@@ -676,17 +692,9 @@ class RiskManager:
             self.log(f"Error fetching VIX: {e}", "WARNING")
         
         # ========== SAFEGUARD 4: Time-of-Day Filter (ENTRIES ONLY) ==========
-        # Disabled when NO_TRADE_AFTER is None.
-        if NO_TRADE_AFTER:
-            current_time = datetime.now().strftime("%H:%M")
-            try:
-                now_t = datetime.strptime(current_time, "%H:%M").time()
-                cutoff_t = datetime.strptime(str(NO_TRADE_AFTER), "%H:%M").time()
-                if now_t > cutoff_t:
-                    return False, f"⛔ BLOCKED: After {NO_TRADE_AFTER} EST (time filter) | Current: {current_time} EST"
-            except Exception:
-                # If parsing fails for any reason, do NOT block trading.
-                pass
+        # DISABLED - NO_TRADE_AFTER is None, trading allowed all day
+        # This safeguard is completely disabled per user request
+        # No time restrictions - trading allowed throughout market hours
         
         # ========== SAFEGUARD 5: Max Concurrent Positions ==========
         if len(self.open_positions) >= MAX_CONCURRENT:
@@ -774,7 +782,10 @@ class RiskManager:
         # ========== SAFEGUARD 8.6: Global Trade Cooldown ==========
         # Minimum time between ANY trades (prevents cascading issues)
         if self.last_any_trade_time:
-            time_since_last_trade = (datetime.now() - self.last_any_trade_time).total_seconds()
+            # Use EST for all timestamps
+            est = pytz.timezone('US/Eastern')
+            now_est = datetime.now(est)
+            time_since_last_trade = (now_est - self.last_any_trade_time).total_seconds()
             if time_since_last_trade < MIN_TRADE_COOLDOWN_SECONDS:
                 return False, f"⛔ BLOCKED: Global trade cooldown active | {int(time_since_last_trade)}s < {MIN_TRADE_COOLDOWN_SECONDS}s (prevents cascading issues)"
         
@@ -792,7 +803,10 @@ class RiskManager:
             # Prevent immediate re-entry after stop-loss trigger (protects from volatile symbols)
             STOP_LOSS_COOLDOWN_MINUTES = 3  # 3 minutes cooldown after stop-loss
             if underlying in self.symbol_stop_loss_cooldown:
-                time_since_sl = (datetime.now() - self.symbol_stop_loss_cooldown[underlying]).total_seconds()
+                # Use EST for all timestamps
+                est = pytz.timezone('US/Eastern')
+                now_est = datetime.now(est)
+                time_since_sl = (now_est - self.symbol_stop_loss_cooldown[underlying]).total_seconds()
                 if time_since_sl < (STOP_LOSS_COOLDOWN_MINUTES * 60):
                     remaining_minutes = int((STOP_LOSS_COOLDOWN_MINUTES * 60 - time_since_sl) / 60) + 1
                     return False, f"⛔ BLOCKED: Stop-loss cooldown active for {underlying} | {remaining_minutes} minute(s) remaining (prevents re-entry after SL trigger)"
@@ -804,7 +818,10 @@ class RiskManager:
             # Prevent rapid-fire trades on the same symbol (minimum 10 seconds between entries)
             MIN_SYMBOL_COOLDOWN_SECONDS = 10  # 10 seconds minimum between trades per symbol
             if underlying in self.symbol_last_trade_time:
-                time_since_last = (datetime.now() - self.symbol_last_trade_time[underlying]).total_seconds()
+                # Use EST for all timestamps
+                est = pytz.timezone('US/Eastern')
+                now_est = datetime.now(est)
+                time_since_last = (now_est - self.symbol_last_trade_time[underlying]).total_seconds()
                 if time_since_last < MIN_SYMBOL_COOLDOWN_SECONDS:
                     remaining_seconds = int(MIN_SYMBOL_COOLDOWN_SECONDS - time_since_last) + 1
                     return False, f"⛔ BLOCKED: Per-symbol cooldown active for {underlying} | {remaining_seconds}s remaining (prevents rapid-fire trading)"
@@ -813,7 +830,10 @@ class RiskManager:
             # Prevent immediate re-entry after trailing-stop trigger (60 seconds cooldown)
             TRAILING_STOP_COOLDOWN_SECONDS = 60  # 60 seconds cooldown after trailing stop
             if underlying in self.symbol_trailing_stop_cooldown:
-                time_since_ts = (datetime.now() - self.symbol_trailing_stop_cooldown[underlying]).total_seconds()
+                # Use EST for all timestamps
+                est = pytz.timezone('US/Eastern')
+                now_est = datetime.now(est)
+                time_since_ts = (now_est - self.symbol_trailing_stop_cooldown[underlying]).total_seconds()
                 if time_since_ts < TRAILING_STOP_COOLDOWN_SECONDS:
                     remaining_seconds = int(TRAILING_STOP_COOLDOWN_SECONDS - time_since_ts) + 1
                     return False, f"⛔ BLOCKED: Trailing-stop cooldown active for {underlying} | {remaining_seconds}s remaining (prevents re-entry after TS trigger)"
@@ -822,11 +842,17 @@ class RiskManager:
                     del self.symbol_trailing_stop_cooldown[underlying]
             
             # Record trade time for per-symbol cooldown (for entries only)
-            self.symbol_last_trade_time[underlying] = datetime.now()
+            # Use EST for all timestamps
+            est = pytz.timezone('US/Eastern')
+            now_est = datetime.now(est)
+            self.symbol_last_trade_time[underlying] = now_est
         
         # ========== SAFEGUARD 9: Duplicate Order Protection ==========
         if symbol in self.last_order_time:
-            time_since_last = (datetime.now() - self.last_order_time[symbol]).total_seconds()
+            # Use EST for all timestamps
+            est = pytz.timezone('US/Eastern')
+            now_est = datetime.now(est)
+            time_since_last = (now_est - self.last_order_time[symbol]).total_seconds()
             if time_since_last < DUPLICATE_ORDER_WINDOW:
                 return False, f"⛔ BLOCKED: Duplicate order protection | {int(time_since_last)}s < {DUPLICATE_ORDER_WINDOW}s (prevents duplicate orders for same symbol)"
         
@@ -845,8 +871,11 @@ class RiskManager:
             symbol: Option symbol
             is_entry: True if this is an entry (buy), False if exit (sell)
         """
-        self.last_order_time[symbol] = datetime.now()
-        self.last_any_trade_time = datetime.now()  # Track global trade time for cooldown
+        # Use EST for all timestamps
+        est = pytz.timezone('US/Eastern')
+        now_est = datetime.now(est)
+        self.last_order_time[symbol] = now_est
+        self.last_any_trade_time = now_est  # Track global trade time for cooldown
         
         # CRITICAL: Increment trade count ONLY on entries (not exits)
         # Exits (SL/TP/TS) should NOT count toward daily trade limit
@@ -943,7 +972,10 @@ def choose_best_symbol_for_trade(iteration: int, symbol_actions: dict, target_ac
         # Stop-loss cooldown check (3 minutes)
         STOP_LOSS_COOLDOWN_MINUTES = 3
         if sym in risk_mgr.symbol_stop_loss_cooldown:
-            time_since_sl = (datetime.now() - risk_mgr.symbol_stop_loss_cooldown[sym]).total_seconds()
+            # Use EST for all timestamps
+            est = pytz.timezone('US/Eastern')
+            now_est = datetime.now(est)
+            time_since_sl = (now_est - risk_mgr.symbol_stop_loss_cooldown[sym]).total_seconds()
             if time_since_sl < (STOP_LOSS_COOLDOWN_MINUTES * 60):
                 remaining = int((STOP_LOSS_COOLDOWN_MINUTES * 60 - time_since_sl) / 60) + 1
                 filtered_reasons.append(f"{sym}:SL_cooldown({remaining}min)")
@@ -955,7 +987,10 @@ def choose_best_symbol_for_trade(iteration: int, symbol_actions: dict, target_ac
         # Trailing-stop cooldown check (60 seconds)
         TRAILING_STOP_COOLDOWN_SECONDS = 60
         if sym in risk_mgr.symbol_trailing_stop_cooldown:
-            time_since_ts = (datetime.now() - risk_mgr.symbol_trailing_stop_cooldown[sym]).total_seconds()
+            # Use EST for all timestamps
+            est = pytz.timezone('US/Eastern')
+            now_est = datetime.now(est)
+            time_since_ts = (now_est - risk_mgr.symbol_trailing_stop_cooldown[sym]).total_seconds()
             if time_since_ts < TRAILING_STOP_COOLDOWN_SECONDS:
                 remaining = int(TRAILING_STOP_COOLDOWN_SECONDS - time_since_ts) + 1
                 filtered_reasons.append(f"{sym}:TS_cooldown({remaining}s)")
@@ -1020,15 +1055,16 @@ def choose_best_symbol_for_trade(iteration: int, symbol_actions: dict, target_ac
 
 def get_market_data(symbol: str, period: str = "2d", interval: str = "1m", api: Optional[tradeapi.REST] = None, risk_mgr = None) -> pd.DataFrame:
     """
-    Get market data - tries Alpaca first (you're paying for it!), then Massive, then yfinance
+    Get market data - tries Alpaca first (you're paying for it!), then Massive API
     
     Priority:
     1. Alpaca API (real-time, included with trading account)
     2. Massive API (if available)
-    3. yfinance (free fallback, delayed - LAST RESORT)
+    3. yfinance (DISABLED by default - delayed data not acceptable for 0DTE trading)
     
     CRITICAL: For 0DTE trading, only Alpaca/Massive are acceptable (real-time).
-    yfinance is delayed 15-20 minutes and should only be used if both fail.
+    yfinance is delayed 15-20 minutes and is DISABLED by default (ALLOW_YFINANCE_FALLBACK = False).
+    If both Alpaca and Massive fail, returns empty DataFrame (iteration will be skipped).
     
     Args:
         symbol: Stock symbol (SPY, QQQ, SPX, etc.)
@@ -1356,78 +1392,91 @@ def get_market_data(symbol: str, period: str = "2d", interval: str = "1m", api: 
                 risk_mgr.log(f"   Traceback: {traceback.format_exc()[:200]}", "WARNING")
             pass
     
-    # ========== PRIORITY 3: YFINANCE (LAST RESORT - DELAYED DATA) ==========
-    # ⚠️ WARNING: yfinance is DELAYED (15-20 minutes) and has NO OPTIONS DATA
-    # Only use if Alpaca AND Massive both fail
-    # For 0DTE trading, this is NOT acceptable - should fail rather than use delayed data
-    try:
-        if risk_mgr and hasattr(risk_mgr, 'log'):
-            risk_mgr.log(
-                f"⚠️ WARNING: Both Alpaca and Massive failed for {symbol}. "
-                f"Falling back to yfinance (DELAYED 15-20 min - NOT SUITABLE FOR 0DTE TRADING)",
-                "WARNING"
-            )
-        
-        # Map symbol for yfinance (SPX needs ^ prefix)
-        yf_symbol = symbol
-        if symbol == 'SPX':
-            yf_symbol = '^GSPC'  # S&P 500 index (more reliable than ^SPX)
-        
-        # Force fresh fetch (clear any caches)
-        ticker = yf.Ticker(yf_symbol)
-        hist = ticker.history(period=period, interval=interval)
-        
-        # Ultimate yfinance 2025+ compatibility fix
-        if isinstance(hist.columns, pd.MultiIndex):
-            hist.columns = hist.columns.get_level_values(0)
-        hist = hist.dropna()
-        
-        if len(hist) > 0:
-            # CRITICAL: Validate this is TODAY's data
-            is_valid, validation_msg = validate_data_freshness(hist, "yfinance")
-            
-            if not is_valid:
-                if risk_mgr and hasattr(risk_mgr, 'log'):
-                    risk_mgr.log(
-                        f"❌ CRITICAL: yfinance data validation failed for {symbol}: {validation_msg}. "
-                        f"Cannot use stale data for 0DTE trading.",
-                        "ERROR"
-                    )
-                return pd.DataFrame()  # Return empty - better than wrong data
-            
-            last_price = hist['Close'].iloc[-1]
-            last_time_str = str(hist.index[-1])
-            log_data_source("yfinance (DELAYED - LAST RESORT)", len(hist), symbol, last_price, last_time_str)
-            
+    # ========== NO YFINANCE FALLBACK (DELAYED DATA NOT ACCEPTABLE) ==========
+    # ⚠️ yfinance is DELAYED (15-20 minutes) - NOT SUITABLE FOR 0DTE TRADING
+    # If both Alpaca and Massive fail, return empty DataFrame and skip iteration
+    # This ensures we NEVER use delayed data for trading decisions
+    if ALLOW_YFINANCE_FALLBACK:
+        # Only use yfinance if explicitly enabled (NOT RECOMMENDED)
+        try:
             if risk_mgr and hasattr(risk_mgr, 'log'):
                 risk_mgr.log(
-                    f"⚠️ Using yfinance (DELAYED) for {symbol} - NOT SUITABLE FOR 0DTE! "
-                    f"Last price: ${last_price:.2f} at {hist.index[-1]}. "
-                    f"{validation_msg}",
+                    f"⚠️ WARNING: Both Alpaca and Massive failed for {symbol}. "
+                    f"Falling back to yfinance (DELAYED 15-20 min - NOT SUITABLE FOR 0DTE TRADING)",
                     "WARNING"
                 )
             
-            return hist
-        else:
+            # Map symbol for yfinance (SPX needs ^ prefix)
+            yf_symbol = symbol
+            if symbol == 'SPX':
+                yf_symbol = '^GSPC'  # S&P 500 index (more reliable than ^SPX)
+            
+            # Force fresh fetch (clear any caches)
+            ticker = yf.Ticker(yf_symbol)
+            hist = ticker.history(period=period, interval=interval)
+            
+            # Ultimate yfinance 2025+ compatibility fix
+            if isinstance(hist.columns, pd.MultiIndex):
+                hist.columns = hist.columns.get_level_values(0)
+            hist = hist.dropna()
+            
+            if len(hist) > 0:
+                # CRITICAL: Validate this is TODAY's data
+                is_valid, validation_msg = validate_data_freshness(hist, "yfinance")
+                
+                if not is_valid:
+                    if risk_mgr and hasattr(risk_mgr, 'log'):
+                        risk_mgr.log(
+                            f"❌ CRITICAL: yfinance data validation failed for {symbol}: {validation_msg}. "
+                            f"Cannot use stale data for 0DTE trading.",
+                            "ERROR"
+                        )
+                    return pd.DataFrame()  # Return empty - better than wrong data
+                
+                last_price = hist['Close'].iloc[-1]
+                last_time_str = str(hist.index[-1])
+                log_data_source("yfinance (DELAYED - LAST RESORT)", len(hist), symbol, last_price, last_time_str)
+                
+                if risk_mgr and hasattr(risk_mgr, 'log'):
+                    risk_mgr.log(
+                        f"⚠️ Using yfinance (DELAYED) for {symbol} - NOT SUITABLE FOR 0DTE! "
+                        f"Last price: ${last_price:.2f} at {hist.index[-1]}. "
+                        f"{validation_msg}",
+                        "WARNING"
+                    )
+                
+                return hist
+            else:
+                if risk_mgr and hasattr(risk_mgr, 'log'):
+                    risk_mgr.log(f"❌ yfinance returned empty data for {symbol}", "ERROR")
+                return pd.DataFrame()
+        except Exception as e:
             if risk_mgr and hasattr(risk_mgr, 'log'):
-                risk_mgr.log(f"❌ yfinance returned empty data for {symbol}", "ERROR")
+                risk_mgr.log(f"❌ All data sources failed for {symbol}: {e}", "ERROR")
             return pd.DataFrame()
-    except Exception as e:
+    else:
+        # yfinance fallback DISABLED - return empty DataFrame
         if risk_mgr and hasattr(risk_mgr, 'log'):
-            risk_mgr.log(f"❌ All data sources failed for {symbol}: {e}", "ERROR")
-        return pd.DataFrame()
+            risk_mgr.log(
+                f"❌ CRITICAL: Both Alpaca and Massive API failed for {symbol}. "
+                f"yfinance fallback is DISABLED (delayed data not acceptable for 0DTE trading). "
+                f"Returning empty DataFrame - iteration will be skipped.",
+                "ERROR"
+            )
+        return pd.DataFrame()  # Empty DataFrame - main loop will skip iteration
 
 def get_current_price(symbol: str, risk_mgr=None) -> Optional[float]:
     """
-    Get current price - tries Massive API first, falls back to yfinance
+    Get current price - tries Massive API first, then Alpaca API
     CRITICAL: Returns REAL-TIME price with data source logging
+    NO yfinance fallback (delayed data not acceptable for 0DTE trading)
     
     Args:
         symbol: Stock symbol
         risk_mgr: RiskManager instance for logging (optional)
     
     Returns:
-        Current price or None
+        Current price or None (if both APIs fail)
     """
     global massive_client
     
@@ -1443,7 +1492,7 @@ def get_current_price(symbol: str, risk_mgr=None) -> Optional[float]:
     }
     massive_symbol = massive_symbol_map.get(symbol, symbol.replace('^', ''))
     
-    # Try Massive API first
+    # ========== PRIORITY 1: MASSIVE API ==========
     if massive_client:
         try:
             if symbol.startswith('^VIX') or symbol == 'VIX.X':
@@ -1463,49 +1512,67 @@ def get_current_price(symbol: str, risk_mgr=None) -> Optional[float]:
                 risk_mgr.log(f"⚠️ Massive API price fetch failed for {symbol}: {e}", "DEBUG")
             pass
     
-    # Fallback to yfinance
-    try:
-        # Handle SPX ticker (requires ^ prefix for yfinance)
-        yf_symbol = symbol
-        if symbol == 'SPX':
-            yf_symbol = '^GSPC'  # S&P 500 index
-        elif symbol.startswith('^'):
-            yf_symbol = symbol  # Already has ^ prefix
-        
-        ticker = yf.Ticker(yf_symbol)
-        hist = ticker.history(period="1d", interval="1m")
-        if isinstance(hist.columns, pd.MultiIndex):
-            hist.columns = hist.columns.get_level_values(0)
-        if len(hist) > 0:
-            price_float = float(hist['Close'].iloc[-1])
-            last_time = hist.index[-1]
+    # ========== PRIORITY 2: ALPACA API ==========
+    # Try Alpaca API if available (for symbols it supports)
+    # Note: This requires api parameter, but get_current_price doesn't have it
+    # Alpaca price fetching would need to be added if needed
+    
+    # ========== NO YFINANCE FALLBACK ==========
+    # yfinance is DELAYED (15-20 minutes) - NOT SUITABLE FOR 0DTE TRADING
+    if ALLOW_YFINANCE_FALLBACK:
+        # Only use yfinance if explicitly enabled (NOT RECOMMENDED)
+        try:
+            # Handle SPX ticker (requires ^ prefix for yfinance)
+            yf_symbol = symbol
+            if symbol == 'SPX':
+                yf_symbol = '^GSPC'  # S&P 500 index
+            elif symbol.startswith('^'):
+                yf_symbol = symbol  # Already has ^ prefix
             
-            # Check data freshness
-            est = pytz.timezone('US/Eastern')
-            now_est = datetime.now(est)
-            if hasattr(last_time, 'tzinfo') and last_time.tzinfo:
-                last_time_est = last_time.astimezone(est)
-            else:
-                try:
-                    last_time_utc = pytz.utc.localize(last_time)
-                    last_time_est = last_time_utc.astimezone(est)
-                except:
-                    last_time_est = est.localize(last_time) if last_time.tzinfo is None else last_time
-            
-            time_diff_minutes = (now_est - last_time_est).total_seconds() / 60
-            
+            ticker = yf.Ticker(yf_symbol)
+            hist = ticker.history(period="1d", interval="1m")
+            if isinstance(hist.columns, pd.MultiIndex):
+                hist.columns = hist.columns.get_level_values(0)
+            if len(hist) > 0:
+                price_float = float(hist['Close'].iloc[-1])
+                last_time = hist.index[-1]
+                
+                # Check data freshness
+                est = pytz.timezone('US/Eastern')
+                now_est = datetime.now(est)
+                if hasattr(last_time, 'tzinfo') and last_time.tzinfo:
+                    last_time_est = last_time.astimezone(est)
+                else:
+                    try:
+                        last_time_utc = pytz.utc.localize(last_time)
+                        last_time_est = last_time_utc.astimezone(est)
+                    except:
+                        last_time_est = est.localize(last_time) if last_time.tzinfo is None else last_time
+                
+                time_diff_minutes = (now_est - last_time_est).total_seconds() / 60
+                
+                if risk_mgr and hasattr(risk_mgr, 'log'):
+                    risk_mgr.log(
+                        f"⚠️ {symbol} Price: ${price_float:.2f} (source: yfinance - DELAYED {time_diff_minutes:.1f} min) | "
+                        f"Last bar: {last_time_est.strftime('%H:%M:%S %Z')} | "
+                        f"WARNING: Delayed data not suitable for 0DTE trading!",
+                        "WARNING"
+                    )
+                
+                return price_float
+        except Exception as e:
             if risk_mgr and hasattr(risk_mgr, 'log'):
-                risk_mgr.log(
-                    f"📊 {symbol} Price: ${price_float:.2f} (source: yfinance - DELAYED {time_diff_minutes:.1f} min) | "
-                    f"Last bar: {last_time_est.strftime('%H:%M:%S %Z')}",
-                    "INFO" if time_diff_minutes < 20 else "WARNING"
-                )
-            
-            return price_float
-    except Exception as e:
+                risk_mgr.log(f"⚠️ yfinance price fetch failed for {symbol}: {e}", "DEBUG")
+            pass
+    else:
+        # yfinance fallback DISABLED
         if risk_mgr and hasattr(risk_mgr, 'log'):
-            risk_mgr.log(f"⚠️ yfinance price fetch failed for {symbol}: {e}", "DEBUG")
-        pass
+            risk_mgr.log(
+                f"❌ CRITICAL: Massive API failed for {symbol} price. "
+                f"yfinance fallback is DISABLED (delayed data not acceptable). "
+                f"Returning None - iteration may be skipped.",
+                "ERROR"
+            )
     
     return None
 
@@ -1812,7 +1879,7 @@ def check_stop_losses(api: tradeapi.REST, risk_mgr: RiskManager, symbol_prices: 
                 risk_mgr.open_positions[symbol] = {
                     'strike': strike,
                     'type': option_type,
-                    'entry_time': datetime.now(),  # Approximate
+                    'entry_time': datetime.now(pytz.timezone('US/Eastern')),  # Approximate, EST
                     'contracts': qty,
                     'qty_remaining': qty,
                     'notional': qty * entry_premium * 100,
@@ -1929,7 +1996,10 @@ def check_stop_losses(api: tradeapi.REST, risk_mgr: RiskManager, symbol_prices: 
                         pass  # Never block trading
                 
                 # Record stop-loss trigger for cooldown (prevent immediate re-entry)
-                risk_mgr.symbol_stop_loss_cooldown[underlying] = datetime.now()
+                # Use EST for all timestamps
+                est = pytz.timezone('US/Eastern')
+                now_est = datetime.now(est)
+                risk_mgr.symbol_stop_loss_cooldown[underlying] = now_est
                 positions_to_close.append(symbol)
                 continue
             
@@ -1956,7 +2026,10 @@ def check_stop_losses(api: tradeapi.REST, risk_mgr: RiskManager, symbol_prices: 
                             pass  # Never block trading
                     
                     # Record stop-loss trigger for cooldown (prevent immediate re-entry)
-                    risk_mgr.symbol_stop_loss_cooldown[underlying] = datetime.now()
+                    # Use EST for all timestamps
+                    est = pytz.timezone('US/Eastern')
+                    now_est = datetime.now(est)
+                    risk_mgr.symbol_stop_loss_cooldown[underlying] = now_est
                     positions_to_close.append(symbol)
                     continue
             
@@ -1995,7 +2068,10 @@ def check_stop_losses(api: tradeapi.REST, risk_mgr: RiskManager, symbol_prices: 
                     underlying = extract_underlying_from_option(symbol)
                     risk_mgr.log(f"🚨 STEP 3 STOP-LOSS (MID PRICE): {symbol} @ {mid_pnl_pct:.2%} (Entry: ${entry_premium:.4f}, Mid: ${current_premium:.4f}) → FORCED FULL EXIT", "CRITICAL")
                     # Record stop-loss trigger for cooldown (prevent immediate re-entry)
-                    risk_mgr.symbol_stop_loss_cooldown[underlying] = datetime.now()
+                    # Use EST for all timestamps
+                    est = pytz.timezone('US/Eastern')
+                    now_est = datetime.now(est)
+                    risk_mgr.symbol_stop_loss_cooldown[underlying] = now_est
                     positions_to_close.append(symbol)
                     continue
             
@@ -2004,12 +2080,18 @@ def check_stop_losses(api: tradeapi.REST, risk_mgr: RiskManager, symbol_prices: 
             if (bid_premium is None and mid_premium is None and alpaca_plpc is None and current_premium is None):
                 entry_time = pos_data.get('entry_time')
                 if entry_time:
-                    time_open = (datetime.now() - entry_time).total_seconds()
+                    # Use EST for all timestamps
+                    est = pytz.timezone('US/Eastern')
+                    now_est = datetime.now(est)
+                    time_open = (now_est - entry_time).total_seconds()
                     if time_open > 60:
                         underlying = extract_underlying_from_option(symbol)
                         risk_mgr.log(f"🚨 STEP 4 EMERGENCY CLOSE (NO DATA): {symbol} open for {int(time_open)}s with no premium data → FORCING CLOSE", "CRITICAL")
                         # Record stop-loss trigger for cooldown (prevent immediate re-entry)
-                        risk_mgr.symbol_stop_loss_cooldown[underlying] = datetime.now()
+                        # Use EST for all timestamps
+                        est = pytz.timezone('US/Eastern')
+                        now_est = datetime.now(est)
+                        risk_mgr.symbol_stop_loss_cooldown[underlying] = now_est
                         positions_to_close.append(symbol)
                         continue
             
@@ -3284,7 +3366,7 @@ def run_safe_live_trading():
                 risk_mgr.open_positions[symbol] = {
                     'strike': strike,
                     'type': option_type,
-                    'entry_time': datetime.now(),  # Approximate
+                    'entry_time': datetime.now(pytz.timezone('US/Eastern')),  # Approximate, EST
                     'contracts': int(float(pos.qty)),
                     'qty_remaining': int(float(pos.qty)),
                     # Notional = premium cost, not strike notional

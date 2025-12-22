@@ -553,21 +553,24 @@ def render_analytics():
     stats_df = get_detailed_stats(period)
     st.dataframe(stats_df, use_container_width=True, hide_index=True)
     
-    # Add Logs, Feedback, Data Integrity, and P&L Analysis tabs
+    # Add Logs, Feedback, Data Integrity, P&L Analysis, and Live Activity tabs
     st.markdown("---")
-    tab1, tab2, tab3, tab4 = st.tabs(["📋 Logs", "💬 Feedback", "🔒 Data Integrity", "💰 P&L Analysis"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["🔴 Live Activity", "📋 Logs", "💬 Feedback", "🔒 Data Integrity", "💰 P&L Analysis"])
     
     with tab1:
-        render_logs_section()
+        render_live_activity()
     
     with tab2:
-        render_feedback_section()
+        render_logs_section()
     
     with tab3:
+        render_feedback_section()
+    
+    with tab4:
         from data_integrity_analytics import render_data_integrity_panel
         render_data_integrity_panel()
         
-    with tab4:
+    with tab5:
         render_pnl_analysis()
 
 # ==================== TRADES PAGE ====================
@@ -1900,6 +1903,183 @@ def render_feedback_section():
         st.error("Institutional logging module not found")
     except Exception as e:
         st.error(f"Error loading feedback: {e}")
+
+# ==================== LIVE ACTIVITY SECTION ====================
+def render_live_activity():
+    """Render live activity log showing setup validation and data sources"""
+    st.markdown("### 🔴 Live Activity Log")
+    st.markdown("Real-time view of what the agent is actively analyzing")
+    
+    # Auto-refresh toggle
+    col1, col2, col3 = st.columns([2, 1, 1])
+    with col1:
+        auto_refresh = st.checkbox("🔄 Auto-refresh (every 5 seconds)", value=True, key="auto_refresh_activity")
+    with col2:
+        refresh_btn = st.button("🔄 Refresh Now", key="refresh_activity")
+    with col3:
+        max_entries = st.selectbox("Max Entries", [25, 50, 100, 200], index=1, key="max_activity_entries")
+    
+    # Filter options
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        activity_filter = st.selectbox(
+            "Filter by Type",
+            ["All", "Setup Validation", "Data Source", "RL Inference", "Ensemble", "Trade Execution", "Blocked"],
+            key="activity_filter"
+        )
+    with col2:
+        symbol_filter = st.selectbox(
+            "Filter by Symbol",
+            ["All", "SPY", "QQQ", "IWM"],
+            key="activity_symbol_filter"
+        )
+    with col3:
+        time_range = st.selectbox(
+            "Time Range",
+            ["Last 5 minutes", "Last 15 minutes", "Last 30 minutes", "Last hour", "All"],
+            index=2,
+            key="activity_time_range"
+        )
+    
+    # Load live activity
+    try:
+        from live_activity_log import LiveActivityLog
+        activity_log = LiveActivityLog()
+        activities = activity_log.get_recent_activities(limit=max_entries)
+        
+        # Apply filters
+        if activity_filter != "All":
+            filter_map = {
+                "Setup Validation": "setup_validation",
+                "Data Source": "data_source",
+                "RL Inference": "rl_inference",
+                "Ensemble": "ensemble_activity",
+                "Trade Execution": "trade_execution",
+                "Blocked": "blocked"
+            }
+            activities = [a for a in activities if a.get('type') == filter_map.get(activity_filter)]
+        
+        if symbol_filter != "All":
+            activities = [a for a in activities if a.get('symbol') == symbol_filter]
+        
+        # Filter by time range
+        if time_range != "All":
+            now = datetime.now(pytz.timezone('US/Eastern'))
+            time_map = {
+                "Last 5 minutes": timedelta(minutes=5),
+                "Last 15 minutes": timedelta(minutes=15),
+                "Last 30 minutes": timedelta(minutes=30),
+                "Last hour": timedelta(hours=1)
+            }
+            cutoff = now - time_map.get(time_range, timedelta(minutes=30))
+            activities = [a for a in activities if a.get('timestamp', now) >= cutoff]
+        
+        if activities:
+            st.success(f"📊 Showing {len(activities)} recent activities")
+            
+            # Summary metrics
+            col1, col2, col3, col4 = st.columns(4)
+            
+            # Data source summary
+            data_sources = activity_log.get_data_source_summary()
+            with col1:
+                alpaca_count = data_sources.get('Alpaca API', 0)
+                massive_count = data_sources.get('Massive API', 0)
+                st.metric("Data Sources", f"Alpaca: {alpaca_count} | Massive: {massive_count}")
+            
+            # Setup validation summary
+            setup_summary = activity_log.get_setup_validation_summary()
+            with col2:
+                st.metric("Setups Validated", setup_summary.get('validating', 0))
+            with col3:
+                st.metric("Setups Selected", setup_summary.get('selected', 0))
+            with col4:
+                st.metric("Setups Rejected", setup_summary.get('rejected', 0))
+            
+            # Activity log table
+            st.markdown("#### 📋 Activity Log")
+            
+            # Prepare data for display
+            display_data = []
+            for activity in activities:
+                timestamp = activity.get('timestamp', datetime.now())
+                if isinstance(timestamp, datetime):
+                    time_str = timestamp.strftime('%H:%M:%S')
+                else:
+                    time_str = str(timestamp)
+                
+                activity_type = activity.get('type', 'unknown')
+                symbol = activity.get('symbol', 'N/A')
+                message = activity.get('message', '')[:150]  # Truncate long messages
+                
+                # Format activity type for display
+                type_display = {
+                    'data_source_alpaca': '📊 Data: Alpaca',
+                    'data_source_massive': '📊 Data: Massive',
+                    'data_source_yfinance': '📊 Data: yfinance (DELAYED)',
+                    'setup_validation': '🔍 Setup Validation',
+                    'rl_inference': '🤖 RL Inference',
+                    'ensemble_activity': '🎯 Ensemble',
+                    'trade_execution': '✅ Trade Executed',
+                    'blocked': '⛔ Blocked',
+                    'price_validation': '💰 Price Validation',
+                    'safeguard_check': '🛡️ Safeguard Check'
+                }.get(activity_type, activity_type)
+                
+                # Extract key details
+                details = []
+                if activity.get('data_source'):
+                    details.append(f"Source: {activity['data_source']}")
+                if activity.get('price'):
+                    details.append(f"Price: ${activity['price']:.2f}")
+                if activity.get('rl_action'):
+                    details.append(f"RL: {activity['rl_action']}")
+                if activity.get('confidence'):
+                    details.append(f"Conf: {activity['confidence']:.3f}")
+                if activity.get('ensemble_action'):
+                    details.append(f"Ensemble: {activity['ensemble_action']}")
+                if activity.get('block_reason'):
+                    details.append(f"Reason: {activity['block_reason']}")
+                
+                display_data.append({
+                    'Time': time_str,
+                    'Type': type_display,
+                    'Symbol': symbol,
+                    'Details': ' | '.join(details) if details else '—',
+                    'Message': message
+                })
+            
+            # Display as table
+            if display_data:
+                df = pd.DataFrame(display_data)
+                st.dataframe(
+                    df,
+                    use_container_width=True,
+                    height=600,
+                    hide_index=True
+                )
+            else:
+                st.info("No activities found matching filters")
+        else:
+            st.warning("No activities found. Make sure the agent is running and generating logs.")
+            st.info(f"Looking for log file: {activity_log.log_file}")
+    
+    except ImportError:
+        st.error("Live activity log module not found. Install live_activity_log.py")
+    except Exception as e:
+        st.error(f"Error loading live activity: {e}")
+        import traceback
+        st.code(traceback.format_exc())
+    
+    # Auto-refresh using Streamlit's built-in mechanism
+    if auto_refresh:
+        # Use placeholder to trigger refresh
+        placeholder = st.empty()
+        with placeholder:
+            st.info("🔄 Auto-refreshing every 5 seconds...")
+        time.sleep(5)
+        placeholder.empty()
+        st.rerun()
 
 # ==================== MAIN APP ====================
 def main():

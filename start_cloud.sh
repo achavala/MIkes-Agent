@@ -8,6 +8,10 @@ set -e  # Exit on error
 PORT=${PORT:-8080}
 echo "🚀 Starting Cloud Deployment on PORT ${PORT}"
 
+# Set timezone to EST/EDT (America/New_York) - CRITICAL for consistent timestamps
+export TZ=America/New_York
+echo "🕐 Timezone set to: $TZ (EST/EDT)"
+
 # Set Python path to include user-installed packages
 export PYTHONPATH=/root/.local/lib/python3.11/site-packages:$PYTHONPATH
 export PATH=/root/.local/bin:$PATH

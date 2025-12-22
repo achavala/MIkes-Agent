@@ -27,9 +27,13 @@ FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+# Set timezone to EST/EDT (America/New_York)
 ENV TZ=America/New_York
 ENV PYTHONPATH=/root/.local/lib/python3.11/site-packages:$PYTHONPATH
 ENV PATH=/root/.local/bin:$PATH
+
+# Ensure timezone is set in system
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
 # Install curl for model downloads (lightweight, ~1MB)
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -52,6 +56,8 @@ COPY mike_agent_live_safe.py .
 COPY models/ ./models/
 # Copy other essential Python files (but not test files - excluded by .dockerignore)
 COPY *.py ./
+# Ensure live_activity_log.py is included (for Analytics tab)
+COPY live_activity_log.py ./
 
 # Safety: ensure executable
 RUN chmod +x start_cloud.sh
