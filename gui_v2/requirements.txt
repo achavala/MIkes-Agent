@@ -3,3 +3,6 @@ pandas
 plotly
 alpaca-trade-api
 
+
+
+

@@ -164,3 +164,6 @@ priority_order = ['SPY', 'QQQ', 'IWM']  # SPY first
 
 **✅ ALL VALIDATIONS PASSED - CODE IS READY FOR DEPLOYMENT!**
 
+
+
+

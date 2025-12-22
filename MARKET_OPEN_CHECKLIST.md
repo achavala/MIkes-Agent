@@ -445,3 +445,6 @@ grep "🔍\|🧠\|Symbol selected\|TRADE EXECUTED" logs/agent_*.log | tail -100
 *Ready for live validation* ⏰  
 *All systems go* ✅
 
+
+
+

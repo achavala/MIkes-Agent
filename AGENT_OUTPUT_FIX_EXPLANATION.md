@@ -99,3 +99,6 @@ fly logs --app mike-agent-project --no-tail | grep -iE "error|exception|failed|s
 
 **All fixes applied - agent output should now be visible!** 🎉
 
+
+
+

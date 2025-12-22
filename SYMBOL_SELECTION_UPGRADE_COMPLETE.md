@@ -389,3 +389,6 @@ grep "TRADE EXECUTED" logs/agent_*.log | grep -E "QQQ|SPX"
 *Validation: Market open 9:30 AM* ⏰  
 *Grade: INSTITUTIONAL* 🏦
 
+
+
+

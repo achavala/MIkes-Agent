@@ -211,3 +211,6 @@ python validate_trade_decisions.py
 
 **Status**: If market is closed, no trades will execute. Check again during market hours (9:30 AM - 4:00 PM ET).
 
+
+
+

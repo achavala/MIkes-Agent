@@ -279,3 +279,6 @@ def get_historical_data(...):
 
 **Your training will use REAL data from your PAID subscriptions! 🎯**
 
+
+
+

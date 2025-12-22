@@ -115,3 +115,6 @@ elif mode == 'paper':
 - Verdict should be `PROCEED_TO_PAPER` or `REVISE` (not REJECT)
 - System should recognize that 14 trades with 0 violations is good performance
 
+
+
+

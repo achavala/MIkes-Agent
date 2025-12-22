@@ -186,3 +186,6 @@ PnL: $+65.00
 
 **✅ All alerts are working! You'll receive notifications for all trade events! 📱**
 
+
+
+

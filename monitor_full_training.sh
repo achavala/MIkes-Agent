@@ -69,3 +69,6 @@ grep -A 5 "MomentumDiagnostics @ step=500,000" "$LOG_FILE" 2>/dev/null | head -6
 echo ""
 echo "💡 To watch live: tail -f $LOG_FILE | grep -E '(MomentumDiagnostics|time/|train/)'"
 
+
+
+

@@ -1079,3 +1079,6 @@ The system is designed to be **extremely selective**:
 
 **Result:** Fewer trades, higher quality, better risk management.
 
+
+
+

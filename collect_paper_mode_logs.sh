@@ -73,3 +73,6 @@ ls -lh "$LOG_DIR" | tail -n +2
 echo ""
 echo "💡 Next: Review logs and send for analysis"
 
+
+
+

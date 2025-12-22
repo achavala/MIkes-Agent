@@ -110,3 +110,6 @@ TRADING_SYMBOLS = ['SPY', 'QQQ', 'IWM']  # Already correct, but selection logic 
 
 **Next Step:** I'll fix the `find_atm_strike()` function and symbol selection logic now.
 
+
+
+

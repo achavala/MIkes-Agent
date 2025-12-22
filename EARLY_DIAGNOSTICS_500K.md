@@ -61,3 +61,6 @@ HOLD rate on strong setups: 49.4%
 
 **Last Updated**: 2025-12-12 (Step 5k extracted)
 
+
+
+

@@ -255,3 +255,6 @@ fly logs --app mike-agent-project | grep -c "BLOCKED"
 
 Enjoy monitoring your agent! 🚀
 
+
+
+

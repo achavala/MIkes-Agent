@@ -46,6 +46,7 @@ data/
 models/checkpoints/
 models/*.zip
 !models/mike_historical_model.zip
+!models/mike_23feature_model_final.zip
 *.tar.gz
 *.pkl
 *.h5

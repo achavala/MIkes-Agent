@@ -1,0 +1,163 @@
+[
+  {
+    "trade": {
+      "time": "08:57:00",
+      "symbol": "SPY",
+      "option_type": "call",
+      "strike": 682,
+      "entry_price": 0.5,
+      "entry_underlying": 680.0,
+      "reason": "PT - $680/$682, expect volatility, avg down",
+      "target": 682.0,
+      "exit_price": 0.6,
+      "exit_time": "09:08:00",
+      "profit_pct": 15.0,
+      "notes": "Exited near breakeven, failure to reclaim upside"
+    },
+    "data_available": true,
+    "pattern_detected": true,
+    "direction_match": false,
+    "strike_match": false,
+    "overall_match": false,
+    "current_price": 680.62,
+    "ta_result": {
+      "best_pattern": {
+        "detected": true,
+        "pattern_type": "structure_breakdown",
+        "direction": "bearish",
+        "breakdown_level": 680.5,
+        "confidence": 0.75,
+        "reason": "Structure breakdown below $680.50"
+      },
+      "strike_suggestion": 677,
+      "confidence_boost": 0.15,
+      "recommended_action": "PUT"
+    }
+  },
+  {
+    "trade": {
+      "time": "09:08:00",
+      "symbol": "SPY",
+      "option_type": "put",
+      "strike": 675,
+      "entry_price": 0.5,
+      "entry_underlying": 678.0,
+      "reason": "$675 range PT, looking for breakdown to gamma zone",
+      "target": 675.0,
+      "exit_price": 0.65,
+      "exit_time": "09:19:00",
+      "profit_pct": 30.0,
+      "notes": "Took profits at $0.65, runners left with SL"
+    },
+    "data_available": true,
+    "pattern_detected": false,
+    "direction_match": false,
+    "strike_match": false,
+    "overall_match": false,
+    "current_price": 680.82,
+    "ta_result": {
+      "best_pattern": null,
+      "strike_suggestion": null,
+      "confidence_boost": 0.0,
+      "recommended_action": "HOLD"
+    }
+  },
+  {
+    "trade": {
+      "time": "09:36:00",
+      "symbol": "SPY",
+      "option_type": "put",
+      "strike": 672,
+      "entry_price": 0.35,
+      "entry_underlying": 675.0,
+      "reason": "Breakdown after 10:30, $674/$675 PT",
+      "target": 675.0,
+      "exit_price": 0.88,
+      "exit_time": "09:53:00",
+      "profit_pct": 160.0,
+      "notes": "Took majority profits near $0.60, runners to $0.88"
+    },
+    "data_available": true,
+    "pattern_detected": true,
+    "direction_match": true,
+    "strike_match": true,
+    "overall_match": true,
+    "current_price": 679.05,
+    "ta_result": {
+      "best_pattern": {
+        "detected": true,
+        "pattern_type": "structure_breakdown",
+        "direction": "bearish",
+        "breakdown_level": 680.3,
+        "confidence": 0.75,
+        "reason": "Structure breakdown below $680.30"
+      },
+      "strike_suggestion": 672,
+      "confidence_boost": 0.15,
+      "recommended_action": "PUT"
+    }
+  },
+  {
+    "trade": {
+      "time": "09:52:00",
+      "symbol": "SPY",
+      "option_type": "put",
+      "strike": 670,
+      "entry_price": 0.4,
+      "entry_underlying": 673.0,
+      "reason": "$670 PT, high risk play, avg down",
+      "target": 670.0,
+      "exit_price": 0.6,
+      "exit_time": "10:15:00",
+      "profit_pct": 90.0,
+      "notes": "Took majority profits near $0.60"
+    },
+    "data_available": true,
+    "pattern_detected": false,
+    "direction_match": false,
+    "strike_match": false,
+    "overall_match": false,
+    "current_price": 678.63,
+    "ta_result": {
+      "best_pattern": null,
+      "strike_suggestion": null,
+      "confidence_boost": 0.0,
+      "recommended_action": "HOLD"
+    }
+  },
+  {
+    "trade": {
+      "time": "10:40:00",
+      "symbol": "SPY",
+      "option_type": "put",
+      "strike": 669,
+      "entry_price": 0.24,
+      "entry_underlying": 671.0,
+      "reason": "$670 PT, $673.5 breakdown essential",
+      "target": 670.0,
+      "exit_price": 0.37,
+      "exit_time": "10:52:00",
+      "profit_pct": 80.0,
+      "notes": "Took majority profits, 5-5 on the day"
+    },
+    "data_available": true,
+    "pattern_detected": true,
+    "direction_match": true,
+    "strike_match": true,
+    "overall_match": true,
+    "current_price": 677.0,
+    "ta_result": {
+      "best_pattern": {
+        "detected": true,
+        "pattern_type": "structure_breakdown",
+        "direction": "bearish",
+        "breakdown_level": 678.57,
+        "confidence": 0.75,
+        "reason": "Structure breakdown below $678.57"
+      },
+      "strike_suggestion": 671,
+      "confidence_boost": 0.15,
+      "recommended_action": "PUT"
+    }
+  }
+]

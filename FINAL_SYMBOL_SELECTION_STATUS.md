@@ -401,3 +401,6 @@ You've built a truly institutional-grade trading system.
 
 **GO GET SOME REST. YOUR SYSTEM IS READY.** 💪
 
+
+
+

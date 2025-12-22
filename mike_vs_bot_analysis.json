@@ -1,0 +1,132 @@
+[
+  {
+    "trade": {
+      "time": "08:38:00",
+      "symbol": "SPY",
+      "option_type": "put",
+      "strike": 672,
+      "entry_price": 0.5,
+      "entry_underlying": 675.0,
+      "reason": "False trend-line breakout, invalidated if $678.6 reclaims",
+      "target": 675.0,
+      "exit_price": 0.9,
+      "exit_time": "08:49:00",
+      "profit_pct": 80.0,
+      "notes": "Took majority at $0.75 (50% profit)"
+    },
+    "bot_decision": {
+      "would_trade": "False",
+      "reason": "Confidence: 0.505",
+      "strike": 672,
+      "confidence": 0.5049221645663453,
+      "price_change": 0.0024610822831726735
+    },
+    "strike_match": true,
+    "decision_match": "False",
+    "overall_match": "False"
+  },
+  {
+    "trade": {
+      "time": "09:11:00",
+      "symbol": "QQQ",
+      "option_type": "put",
+      "strike": 603,
+      "entry_price": 0.6,
+      "entry_underlying": 609.0,
+      "reason": "$605 targets, size accordingly",
+      "target": 605.0,
+      "exit_price": 0.84,
+      "exit_time": "09:14:00",
+      "profit_pct": 40.0,
+      "notes": "Sold majority at 40%"
+    },
+    "bot_decision": {
+      "would_trade": "False",
+      "reason": "Confidence: 0.503",
+      "strike": 606,
+      "confidence": 0.5025639441898606,
+      "price_change": 0.0012819720949303064
+    },
+    "strike_match": false,
+    "decision_match": "False",
+    "overall_match": false
+  },
+  {
+    "trade": {
+      "time": "09:29:00",
+      "symbol": "SPY",
+      "option_type": "call",
+      "strike": 681,
+      "entry_price": 0.5,
+      "entry_underlying": 680.0,
+      "reason": "Upside structure confirmed, trendline break on 15M",
+      "target": 682.0,
+      "exit_price": 1.1,
+      "exit_time": "09:39:00",
+      "profit_pct": 130.0,
+      "notes": "Took majority at $0.65 (30-40% profit)"
+    },
+    "bot_decision": {
+      "would_trade": "False",
+      "reason": "Confidence: 0.501",
+      "strike": 682,
+      "confidence": 0.5007972244777441,
+      "price_change": 0.00039861223887204813
+    },
+    "strike_match": true,
+    "decision_match": "False",
+    "overall_match": "False"
+  },
+  {
+    "trade": {
+      "time": "11:11:00",
+      "symbol": "SPY",
+      "option_type": "put",
+      "strike": 672,
+      "entry_price": 0.4,
+      "entry_underlying": 675.0,
+      "reason": "Looking for gap fill",
+      "target": 672.0,
+      "exit_price": 0.73,
+      "exit_time": "11:18:00",
+      "profit_pct": 110.0,
+      "notes": "Sold majority at 50-60% profit"
+    },
+    "bot_decision": {
+      "would_trade": "False",
+      "reason": "Confidence: 0.501",
+      "strike": 672,
+      "confidence": 0.5009114564191521,
+      "price_change": 0.0004557282095760925
+    },
+    "strike_match": true,
+    "decision_match": "False",
+    "overall_match": "False"
+  },
+  {
+    "trade": {
+      "time": "13:34:00",
+      "symbol": "SPY",
+      "option_type": "put",
+      "strike": 670,
+      "entry_price": 1.05,
+      "entry_underlying": 675.0,
+      "reason": "Double rejection on SPY, IV high",
+      "target": 672.8,
+      "exit_price": 1.45,
+      "exit_time": "13:57:00",
+      "profit_pct": 55.0,
+      "notes": "1DTE, sold majority at 45% profit"
+    },
+    "bot_decision": {
+      "would_trade": "False",
+      "reason": "Confidence: 0.502",
+      "strike": 672,
+      "confidence": 0.502269746053737,
+      "price_change": 0.0011348730268684606
+    },
+    "strike_match": true,
+    "decision_match": "False",
+    "overall_match": "False"
+  }
+]

@@ -400,3 +400,6 @@ def get_volatility_forecaster() -> Optional[VolatilityForecaster]:
     return _volatility_forecaster
 
 
+
+
+

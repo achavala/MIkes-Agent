@@ -166,3 +166,6 @@ Should detect model type and log correctly:
 
 **✅ The system is working correctly - it's being selective and conservative, which is excellent risk management! 🎯**
 
+
+
+

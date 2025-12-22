@@ -273,6 +273,10 @@ else:
 - Defined action space: 6 actions
 
 **3. Reward Function**
+
+**⚠️ IMPORTANT:** The reward function shown below is a **conceptual representation**. The actual implementation uses **tiered rewards** based on PnL percentages (see detailed explanation below).
+
+**Conceptual Formula (for understanding):**
 ```python
 reward = (
     realized_pnl / capital * 10 +      # Profit reward
@@ -282,11 +286,65 @@ reward = (
 )
 ```
 
-**Example:**
-- Trade makes $100 profit on $1,000 capital → +1.0 reward
-- Trade loses $50 → -0.5 reward
-- High Sharpe ratio → +0.3 bonus
-- Large drawdown → -0.8 penalty
+**Actual Implementation (Tiered Rewards):**
+
+The actual reward system uses **tiered rewards** based on PnL percentages when positions close:
+
+**For Exits (Full Position Close):**
+```python
+if pnl_pct >= 2.0:      # 200%+ return → +2.0 reward
+    return 2.0
+elif pnl_pct >= 1.0:    # 100%+ return → +1.2 reward
+    return 1.2
+elif pnl_pct >= 0.7:    # 70%+ return → +1.0 reward
+    return 1.0
+elif pnl_pct >= 0.5:    # 50%+ return → +0.7 reward
+    return 0.7
+elif pnl_pct >= 0.3:    # 30%+ return → +0.5 reward
+    return 0.5
+elif pnl_pct >= 0.2:    # 20%+ return → +0.3 reward
+    return 0.3
+# Losses (penalties)
+elif pnl_pct <= -0.15:  # -15% or worse → -0.9 penalty (hard stop zone)
+    return -0.9
+elif pnl_pct <= -0.4:   # -40% or worse → -1.0 penalty
+    return -1.0
+elif pnl_pct <= -0.3:   # -30% or worse → -0.7 penalty
+    return -0.7
+elif pnl_pct <= -0.2:   # -20% or worse → -0.4 penalty
+    return -0.4
+elif pnl_pct < 0:       # Any loss → -0.2 penalty
+    return -0.2
+```
+
+**For Ongoing Positions (Unrealized PnL):**
+```python
+# Reward based on unrealized PnL percentage
+shaped = pnl_pct * 0.05  # Base reward scaled by PnL
+
+# Execution penalties (real-world costs)
+spread_penalty = -0.05        # Spread cost per trade
+slippage_penalty = -0.01 * duration / 60.0  # Slippage increases with time
+holding_penalty = -0.01 * max(0, duration - 30) / 60.0  # Theta decay after 30 min
+
+# Hard loss zone penalty
+if pnl_pct <= -0.15:
+    shaped -= 0.2  # Steep penalty for -15% or worse
+
+# Big drawdown penalty
+if pnl_pct <= -0.30:
+    shaped -= 0.3  # Extra penalty for -30% or worse
+```
+
+**Examples:**
+- Trade makes 50% profit → +0.7 reward (tiered system)
+- Trade makes $100 profit on $1,000 capital (10% return) → +0.3 reward
+- Trade loses 20% → -0.4 penalty
+- Trade loses 15% or more → -0.9 penalty (hard stop zone)
+- High Sharpe ratio → Indirectly rewarded through consistent positive returns
+- Large drawdown → Penalized through tiered loss penalties
+
+**📖 For complete detailed explanation, see:** `REWARD_FUNCTION_DETAILED_EXPLANATION.md`
 
 **4. Training Algorithm: PPO (Proximal Policy Optimization)**
 - **Algorithm:** PPO from Stable-Baselines3

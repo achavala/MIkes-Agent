@@ -85,3 +85,6 @@ echo "   1. Validate model: python3 validate_model.py --model models/${MODEL_NAM
 echo "   2. Update MODEL_PATH in mike_agent_live_safe.py to use new model"
 echo "   3. Test live agent with new LSTM model"
 
+
+
+

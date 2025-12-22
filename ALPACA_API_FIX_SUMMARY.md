@@ -86,3 +86,6 @@ api.get_bars(
 - [x] Proper fallback to Massive API
 - [x] Proper fallback to yfinance (last resort)
 
+
+
+

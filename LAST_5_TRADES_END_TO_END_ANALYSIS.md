@@ -175,28 +175,72 @@ Function: risk_mgr.check_safeguards(api)
 Result: ✅ PASS
 ```
 
-#### **Step 2: Market Data Fetch**
+#### **Step 2: Market Data Fetch (RAW Data Collection)**
 ```
 Function: get_market_data("QQQ", period="2d", interval="1m")
 ├─ Try Alpaca API → Success
 ├─ Get last 2 days of 1-minute bars
 ├─ Validate data freshness → OK (from today)
-└─ Return: DataFrame with OHLCV data
-Result: ✅ Data ready
+└─ Return: DataFrame with RAW OHLCV data (5 columns only)
+   Columns: ['Open', 'High', 'Low', 'Close', 'Volume']
+   
+⚠️ IMPORTANT: This returns ONLY raw market data (OHLCV).
+   Additional features (VIX, Technical Indicators, Greeks) are
+   calculated LATER in prepare_observation().
+
+Result: ✅ Raw data ready (DataFrame with 5 columns)
 ```
 
-#### **Step 3: Observation Preparation**
+#### **Step 3: Observation Preparation (Feature Enrichment)**
 ```
 Function: prepare_observation(hist, risk_mgr, symbol='QQQ')
-├─ Extract last 20 bars (20 minutes)
-├─ Calculate 23 features:
-│  ├─ OHLCV (5): Open, High, Low, Close, Volume
-│  ├─ VIX (2): Current VIX, VIX Delta
-│  ├─ Technical (11): EMA, VWAP, RSI, MACD, ATR, etc.
-│  └─ Greeks (4): Delta, Gamma, Theta, Vega
-└─ Normalize and shape to (20, 23)
-Result: obs = (20, 23) matrix
+├─ Input: DataFrame with OHLCV (5 columns from Step 2)
+├─ Extract last 20 bars (20 minutes of data)
+├─ ENRICH data by calculating 18 additional features:
+│  │
+│  ├─ Use OHLCV from DataFrame (5 features):
+│  │  ├─ Open (normalized % change)
+│  │  ├─ High (normalized % change)
+│  │  ├─ Low (normalized % change)
+│  │  ├─ Close (normalized % change)
+│  │  └─ Volume (normalized)
+│  │
+│  ├─ Fetch VIX data (2 features):
+│  │  ├─ VIX normalized (from risk_mgr.get_current_vix())
+│  │  └─ VIX delta (change from previous)
+│  │
+│  ├─ Calculate Technical Indicators from OHLCV (11 features):
+│  │  ├─ EMA 9/20 difference
+│  │  ├─ VWAP distance
+│  │  ├─ RSI (Relative Strength Index)
+│  │  ├─ MACD histogram
+│  │  ├─ ATR (Average True Range)
+│  │  ├─ Candle body ratio
+│  │  ├─ Candle wick ratio
+│  │  ├─ Pullback
+│  │  ├─ Breakout
+│  │  ├─ Trend slope
+│  │  ├─ Momentum burst
+│  │  └─ Trend strength
+│  │
+│  └─ Calculate Greeks from position (4 features):
+│     ├─ Delta (from greeks_calc)
+│     ├─ Gamma (from greeks_calc)
+│     ├─ Theta (from greeks_calc)
+│     └─ Vega (from greeks_calc)
+│
+└─ Combine all features: 5 (OHLCV) + 2 (VIX) + 11 (Technical) + 4 (Greeks) = 23 features
+└─ Normalize and shape to (20, 23) matrix
+   Shape: 20 timesteps × 23 features per timestep
+
+Result: obs = (20, 23) numpy array ready for RL model
 ```
+
+**✅ DATA FLOW VALIDATION:**
+- **Step 2** returns RAW data (5 columns: OHLCV) ✅
+- **Step 3** ENRICHES raw data by calculating 18 additional features ✅
+- **Total:** 5 (raw) + 18 (calculated) = 23 features ✅
+- **No mismatch** - this is the intended design: raw data collection → feature enrichment
 
 #### **Step 4: RL Model Inference**
 ```

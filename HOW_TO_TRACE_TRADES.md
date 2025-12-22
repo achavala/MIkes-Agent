@@ -234,3 +234,6 @@ For each trade, ask:
 
 **Use these tools to understand exactly why each trade was picked!**
 
+
+
+

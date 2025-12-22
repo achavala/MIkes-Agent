@@ -47,3 +47,6 @@ print()
 print("📋 To check agent activity in real-time:")
 print("   fly logs --app mike-agent-project")
 
+
+
+

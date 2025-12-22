@@ -139,3 +139,6 @@ If you want more trades in paper mode, consider:
 
 But for now, **the system is working correctly.**
 
+
+
+

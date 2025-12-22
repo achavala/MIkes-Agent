@@ -224,3 +224,6 @@ fly logs --app mike-agent-project | grep -E "Error|Failed|Exception|Traceback"
 
 **Next Step: Check agent process status and recent logs to identify the issue. 🎯**
 
+
+
+

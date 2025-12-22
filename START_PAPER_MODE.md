@@ -75,3 +75,6 @@ After 1-2 market sessions, check:
 
 **Ready? Start now**: `python3 mike_agent_live_safe.py`
 
+
+
+

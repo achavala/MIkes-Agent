@@ -495,3 +495,6 @@ def get_backtester() -> Optional[AdvancedBacktester]:
     return _advanced_backtester
 
 
+
+
+

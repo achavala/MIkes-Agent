@@ -37,3 +37,6 @@ fly logs --app mike-agent-project 2>/dev/null | grep --line-buffered -E \
     fi
 done
 
+
+
+

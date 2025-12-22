@@ -206,3 +206,6 @@ If you don't see an alert, check logs for "rate limited" message.
 
 **✅ All alerts are now working! You'll receive notifications for all trade events! 📱**
 
+
+
+

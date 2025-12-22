@@ -48,3 +48,6 @@ done
 echo "💡 For full details, run:"
 echo "   grep -A 6 'MomentumDiagnostics @ step=XXX' $LOG_FILE"
 
+
+
+

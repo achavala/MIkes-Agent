@@ -112,3 +112,6 @@ Should show:
 - Local testing with yfinance will show fewer bars - this is expected
 - Production with Alpaca API will show full 2 days of data
 
+
+
+

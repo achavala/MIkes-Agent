@@ -1583,8 +1583,32 @@ def sync_alpaca_history():
             if '0DTE' in order.symbol: # Naive check, improved if we parse symbol
                 is_0dte = 1
             
+            # Convert UTC timestamps to EST
+            import pytz
+            est = pytz.timezone('US/Eastern')
+            
+            def convert_utc_to_est(utc_timestamp):
+                if not utc_timestamp:
+                    return ''
+                try:
+                    ts_str = str(utc_timestamp)
+                    if 'T' in ts_str:
+                        ts_str = ts_str.replace('Z', '+00:00')
+                        dt_utc = datetime.fromisoformat(ts_str)
+                        if dt_utc.tzinfo is None:
+                            dt_utc = pytz.utc.localize(dt_utc)
+                        dt_est = dt_utc.astimezone(est)
+                        return dt_est.strftime('%Y-%m-%d %H:%M:%S %Z')
+                    return ts_str
+                except:
+                    return str(utc_timestamp)
+            
+            filled_at_est = convert_utc_to_est(order.filled_at if hasattr(order, 'filled_at') else None)
+            submitted_at_est = convert_utc_to_est(order.submitted_at if hasattr(order, 'submitted_at') else None)
+            primary_timestamp = filled_at_est or submitted_at_est or datetime.now(est).strftime('%Y-%m-%d %H:%M:%S %Z')
+            
             trade_data = {
-                'timestamp': str(order.filled_at or order.submitted_at),
+                'timestamp': primary_timestamp,
                 'symbol': order.symbol,
                 'action': order.side.upper(),
                 'qty': float(order.filled_qty),
@@ -1592,7 +1616,9 @@ def sync_alpaca_history():
                 'order_id': str(order.id),
                 'source': 'alpaca_sync',
                 'pnl': 0, # Cannot determine easily from single order
-                'is_0dte': is_0dte
+                'is_0dte': is_0dte,
+                'submitted_at': submitted_at_est,
+                'filled_at': filled_at_est
             }
             
             try:

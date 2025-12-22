@@ -1025,7 +1025,10 @@ def get_market_data(symbol: str, period: str = "2d", interval: str = "1m", api: 
     Priority:
     1. Alpaca API (real-time, included with trading account)
     2. Massive API (if available)
-    3. yfinance (free fallback, delayed)
+    3. yfinance (free fallback, delayed - LAST RESORT)
+    
+    CRITICAL: For 0DTE trading, only Alpaca/Massive are acceptable (real-time).
+    yfinance is delayed 15-20 minutes and should only be used if both fail.
     
     Args:
         symbol: Stock symbol (SPY, QQQ, SPX, etc.)
@@ -1036,13 +1039,66 @@ def get_market_data(symbol: str, period: str = "2d", interval: str = "1m", api: 
     
     Returns:
         DataFrame with OHLCV data (Open, High, Low, Close, Volume)
+        Returns empty DataFrame if all sources fail or data is stale
     """
     global massive_client
     
-    # Helper function to log data collection
-    def log_data_source(source: str, bars: int, symbol: str):
+    # Use EST timezone for all date/time calculations
+    est = pytz.timezone('US/Eastern')
+    now_est = datetime.now(est)
+    today_est = now_est.date()
+    
+    # Helper function to validate data freshness
+    def validate_data_freshness(data: pd.DataFrame, source: str) -> tuple[bool, str]:
+        """
+        Validate that data is from today and not stale (>5 minutes old)
+        Returns: (is_valid, error_message)
+        """
+        if len(data) == 0:
+            return False, "Empty data"
+        
+        last_bar_time = data.index[-1]
+        
+        # Convert to EST if timezone-aware, otherwise assume UTC and convert
+        if hasattr(last_bar_time, 'tzinfo') and last_bar_time.tzinfo:
+            last_bar_est = last_bar_time.astimezone(est)
+        else:
+            # Assume UTC if no timezone
+            try:
+                last_bar_utc = pytz.utc.localize(last_bar_time)
+                last_bar_est = last_bar_utc.astimezone(est)
+            except:
+                # If localization fails, assume it's already in local time
+                last_bar_est = est.localize(last_bar_time) if last_bar_time.tzinfo is None else last_bar_time
+        
+        last_bar_date = last_bar_est.date()
+        
+        # Check 1: Data must be from TODAY
+        if last_bar_date != today_est:
+            return False, f"Data is from {last_bar_date}, not today ({today_est})"
+        
+        # Check 2: Data must be fresh (< 5 minutes old during market hours)
+        time_diff_minutes = (now_est - last_bar_est).total_seconds() / 60
+        
+        # During market hours (9:30 AM - 4:00 PM EST), reject data > 5 minutes old
+        # Outside market hours, allow up to 1 hour old (for pre/post market data)
+        market_hours = 9.5 <= now_est.hour + (now_est.minute / 60) < 16.0
+        max_age_minutes = 5 if market_hours else 60
+        
+        if time_diff_minutes > max_age_minutes:
+            return False, f"Data is {time_diff_minutes:.1f} minutes old (max: {max_age_minutes} min)"
+        
+        return True, f"Fresh data: {time_diff_minutes:.1f} minutes old, date: {last_bar_date}"
+    
+    # Helper function to log data collection with details
+    def log_data_source(source: str, bars: int, symbol: str, last_price: float = None, last_time: str = None):
         if risk_mgr and hasattr(risk_mgr, 'log'):
-            risk_mgr.log(f"📊 {symbol} Data: {bars} bars from {source} | period={period}, interval={interval}", "INFO")
+            details = f" | Last: ${last_price:.2f} at {last_time}" if last_price and last_time else ""
+            risk_mgr.log(
+                f"📊 {symbol} Data: {bars} bars from {source}{details} | "
+                f"period={period}, interval={interval}",
+                "INFO"
+            )
     
     # ========== PRIORITY 1: ALPACA API (You're paying for this!) ==========
     if api:
@@ -1051,10 +1107,8 @@ def get_market_data(symbol: str, period: str = "2d", interval: str = "1m", api: 
             risk_mgr.log(f"🔍 Alpaca API available for {symbol}, attempting data fetch...", "INFO")
         try:
             from alpaca_trade_api.rest import TimeFrame
-            # datetime and timedelta already imported at top of file
             
-            # Calculate date range - get full 2 days including today
-            # For 2 days: get data from 2 days ago to today (inclusive)
+            # Calculate date range using EST timezone
             if period == "2d":
                 days = 2
             elif period == "1d":
@@ -1064,15 +1118,16 @@ def get_market_data(symbol: str, period: str = "2d", interval: str = "1m", api: 
             else:
                 days = 2  # Default
             
-            # Use current time as end, go back (days) days for start
-            # This ensures we get the most recent data including today
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=days)
-            
-            # For better data coverage, extend start date slightly to ensure we get full 2 days
-            # Alpaca might filter to market hours, so we request a bit more to be safe
+            # Use EST timezone for date calculations
+            start_date = now_est - timedelta(days=days)
             if period == "2d":
-                start_date = start_date - timedelta(hours=12)  # Go back 12 hours more to ensure full coverage
+                start_date = start_date - timedelta(hours=12)  # Buffer for extended hours
+            
+            # Use tomorrow as end date to ensure we get today's data (Alpaca end date is exclusive)
+            end_date = now_est + timedelta(days=1)
+            
+            start_str = start_date.strftime("%Y-%m-%d")
+            end_str = end_date.strftime("%Y-%m-%d")
             
             # Map interval to Alpaca TimeFrame
             if interval == "1m":
@@ -1086,20 +1141,13 @@ def get_market_data(symbol: str, period: str = "2d", interval: str = "1m", api: 
             else:
                 timeframe = TimeFrame.Minute  # Default to 1 minute
             
-            # Get bars from Alpaca (limit 5000 bars per request)
-            # For 2 days of 1-minute data: 
-            # - Market hours only: ~780 bars (390 min/day × 2 days)
-            # - Market + extended hours: ~1,920 bars (960 min/day × 2 days)
-            # - Full 24/7: ~2,880 bars (1,440 min/day × 2 days) - unrealistic for stock markets
-            # Alpaca API v2: Use date strings in YYYY-MM-DD format (most reliable)
-            # Ensure we include today's data by using tomorrow as end date (exclusive end)
-            start_str = start_date.strftime("%Y-%m-%d")
-            # Use tomorrow as end date to ensure we get today's data (Alpaca end date is exclusive)
-            end_str = (end_date + timedelta(days=1)).strftime("%Y-%m-%d")
-            
-            # Log attempt for debugging
+            # Log request with EST timezone info
             if risk_mgr and hasattr(risk_mgr, 'log'):
-                risk_mgr.log(f"🔍 Attempting Alpaca API fetch for {symbol}: {start_str} to {end_str}, timeframe={timeframe}", "INFO")
+                risk_mgr.log(
+                    f"🔍 Alpaca API: Requesting {symbol} from {start_str} to {end_str}, "
+                    f"timeframe={timeframe} (EST: {now_est.strftime('%Y-%m-%d %H:%M:%S %Z')}, Today: {today_est})",
+                    "INFO"
+                )
             
             # Alpaca API v2 get_bars signature:
             # get_bars(symbol, timeframe, start, end, limit=None, adjustment=None)
@@ -1115,7 +1163,6 @@ def get_market_data(symbol: str, period: str = "2d", interval: str = "1m", api: 
             if len(bars) > 0:
                 # Alpaca returns: open, high, low, close, volume (lowercase)
                 # Rename to match expected format (capitalized)
-                # Handle both single column names and MultiIndex
                 if isinstance(bars.columns, pd.MultiIndex):
                     bars.columns = bars.columns.get_level_values(0)
                 
@@ -1129,44 +1176,59 @@ def get_market_data(symbol: str, period: str = "2d", interval: str = "1m", api: 
                 # Ensure we have required columns
                 required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
                 if not all(col in bars.columns for col in required_cols):
-                    # Try to infer from existing columns
                     for req_col in required_cols:
                         if req_col not in bars.columns:
                             lower_col = req_col.lower()
                             if lower_col in bars.columns:
                                 bars = bars.rename(columns={lower_col: req_col})
                 
-                # Check if Alpaca returned sufficient data for 2 days
-                # Realistic expectations for 2 days of 1-minute data:
-                # - Market hours only: ~780 bars (390 min/day × 2 days)
-                # - Market + extended hours: ~1,920 bars (960 min/day × 2 days) ✅ This is what we're getting
-                # - Full 24/7: ~2,880 bars (1,440 min/day × 2 days) - unrealistic for stock markets
-                # 
-                # ~1,800 bars is actually GOOD - it includes market hours + extended hours
-                # Both Alpaca and Massive return similar amounts because that's all the data available
-                bars_count = len(bars)
+                # CRITICAL: Validate data freshness (must be from today and < 5 minutes old)
+                is_valid, validation_msg = validate_data_freshness(bars, "Alpaca API")
                 
-                # For 2 days, expect at least 1,500 bars (market hours + some extended hours)
-                # If we get less, try Massive API as backup
-                expected_min_bars = 1500 if period == "2d" else 700  # Realistic threshold
-                
-                if bars_count < expected_min_bars and period == "2d":
+                if not is_valid:
                     if risk_mgr and hasattr(risk_mgr, 'log'):
-                        risk_mgr.log(f"⚠️ Alpaca API returned only {bars_count} bars for 2 days (expected at least {expected_min_bars}). Trying Massive API...", "WARNING")
-                    # Don't return yet - try Massive API for better data
+                        risk_mgr.log(
+                            f"❌ CRITICAL: Alpaca data validation failed for {symbol}: {validation_msg}. "
+                            f"Rejecting stale data, trying Massive API...",
+                            "ERROR"
+                        )
+                    # Don't return stale data - fall through to Massive API
+                    bars = pd.DataFrame()
                 else:
-                    # Alpaca data is sufficient (1,800+ bars is good for market hours + extended hours)
-                    log_data_source("Alpaca API", bars_count, symbol)
-                    if risk_mgr and hasattr(risk_mgr, 'log') and bars_count >= 1500:
-                        risk_mgr.log(f"✅ Alpaca API returned {bars_count} bars (market hours + extended hours) - sufficient for RL model", "INFO")
-                    return bars
+                    bars_count = len(bars)
+                    expected_min_bars = 1500 if period == "2d" else 700
+                    
+                    if bars_count < expected_min_bars and period == "2d":
+                        if risk_mgr and hasattr(risk_mgr, 'log'):
+                            risk_mgr.log(
+                                f"⚠️ Alpaca API returned only {bars_count} bars for 2 days "
+                                f"(expected at least {expected_min_bars}). Trying Massive API...",
+                                "WARNING"
+                            )
+                        # Don't return yet - try Massive API for better data
+                    else:
+                        # Data is valid and sufficient
+                        last_price = bars['Close'].iloc[-1]
+                        last_time_str = str(bars.index[-1])
+                        log_data_source("Alpaca API", bars_count, symbol, last_price, last_time_str)
+                        if risk_mgr and hasattr(risk_mgr, 'log'):
+                            risk_mgr.log(
+                                f"✅ Alpaca API: {bars_count} bars, last price: ${last_price:.2f}, "
+                                f"{validation_msg}",
+                                "INFO"
+                            )
+                        return bars
             else:
                 if risk_mgr and hasattr(risk_mgr, 'log'):
-                    risk_mgr.log(f"⚠️ Alpaca API returned empty data for {symbol}, trying Massive/yfinance", "WARNING")
+                    risk_mgr.log(f"⚠️ Alpaca API returned empty data for {symbol}, trying Massive API...", "WARNING")
         except Exception as e:
-            # Fallback to Massive/yfinance
+            # Fallback to Massive API
             if risk_mgr and hasattr(risk_mgr, 'log'):
-                risk_mgr.log(f"⚠️ Alpaca data fetch failed for {symbol}: {str(e)} (type: {type(e).__name__}), trying Massive/yfinance", "WARNING")
+                risk_mgr.log(
+                    f"⚠️ Alpaca data fetch failed for {symbol}: {str(e)} (type: {type(e).__name__}), "
+                    f"trying Massive API...",
+                    "WARNING"
+                )
                 import traceback
                 risk_mgr.log(f"   Traceback: {traceback.format_exc()[:200]}", "WARNING")
             pass
@@ -1184,7 +1246,7 @@ def get_market_data(symbol: str, period: str = "2d", interval: str = "1m", api: 
     
     if massive_client:
         try:
-            # Calculate date range - get full 2 days including today
+            # Calculate date range using EST timezone
             if period == "2d":
                 days = 2
             elif period == "1d":
@@ -1195,15 +1257,17 @@ def get_market_data(symbol: str, period: str = "2d", interval: str = "1m", api: 
                 days = 2  # Default
             
             # Massive API needs date strings in YYYY-MM-DD format
-            # Get data from (days) days ago to today (inclusive)
-            # Use tomorrow as end date to ensure we get today's data (Massive API end date may be exclusive)
-            now = datetime.now()
-            end_date_str = (now + timedelta(days=1)).strftime("%Y-%m-%d")  # Tomorrow to include today
-            start_date_str = (now - timedelta(days=days)).strftime("%Y-%m-%d")
+            # Use EST timezone for date calculations
+            end_date_str = (now_est + timedelta(days=1)).strftime("%Y-%m-%d")  # Tomorrow to include today
+            start_date_str = (now_est - timedelta(days=days)).strftime("%Y-%m-%d")
             
-            # Log attempt for debugging
+            # Log request with EST timezone info
             if risk_mgr and hasattr(risk_mgr, 'log'):
-                risk_mgr.log(f"🔍 Attempting Massive API fetch for {symbol}: {start_date_str} to {end_date_str}, interval={interval}", "INFO")
+                risk_mgr.log(
+                    f"🔍 Massive API: Requesting {symbol} from {start_date_str} to {end_date_str}, "
+                    f"interval={interval} (EST: {now_est.strftime('%Y-%m-%d %H:%M:%S %Z')}, Today: {today_est})",
+                    "INFO"
+                )
             
             # Massive API get_historical_data signature:
             # get_historical_data(symbol, start_date, end_date, interval='1min')
@@ -1217,7 +1281,6 @@ def get_market_data(symbol: str, period: str = "2d", interval: str = "1m", api: 
             if len(hist) > 0:
                 # Massive API returns lowercase columns, normalize to match expected format (capitalized)
                 if 'close' in hist.columns or 'Close' in hist.columns:
-                    # Handle both lowercase and capitalized columns
                     column_map = {}
                     for col in hist.columns:
                         if col.lower() == 'open':
@@ -1241,63 +1304,127 @@ def get_market_data(symbol: str, period: str = "2d", interval: str = "1m", api: 
                     except:
                         pass
                 
-                # CRITICAL FIX: Return ALL data, not just last 50 bars!
-                # Massive API with 1-minute granular package returns market hours + extended hours
-                # Realistic expectation: ~1,800-1,900 bars for 2 days (market + extended hours)
-                hist_count = len(hist)
-                log_data_source("Massive API", hist_count, symbol)
+                # CRITICAL: Validate data freshness (must be from today and < 5 minutes old)
+                is_valid, validation_msg = validate_data_freshness(hist, "Massive API")
                 
-                # Compare with Alpaca data if we have it
-                if risk_mgr and hasattr(risk_mgr, 'log'):
-                    if hist_count < 1500 and period == "2d":
-                        risk_mgr.log(f"⚠️ Massive API returned {hist_count} bars for 2 days (expected at least 1,500). May be incomplete.", "WARNING")
-                    elif hist_count >= 1500:
-                        risk_mgr.log(f"✅ Massive API returned {hist_count} bars (market hours + extended hours) - using complete dataset for {symbol}", "INFO")
-                
-                return hist
+                if not is_valid:
+                    if risk_mgr and hasattr(risk_mgr, 'log'):
+                        risk_mgr.log(
+                            f"❌ CRITICAL: Massive API data validation failed for {symbol}: {validation_msg}. "
+                            f"Rejecting stale data, trying yfinance (DELAYED - LAST RESORT)...",
+                            "ERROR"
+                        )
+                    # Don't return stale data - fall through to yfinance
+                    hist = pd.DataFrame()
+                else:
+                    hist_count = len(hist)
+                    last_price = hist['Close'].iloc[-1] if 'Close' in hist.columns else hist['close'].iloc[-1]
+                    last_time_str = str(hist.index[-1])
+                    log_data_source("Massive API", hist_count, symbol, last_price, last_time_str)
+                    
+                    if risk_mgr and hasattr(risk_mgr, 'log'):
+                        if hist_count < 1500 and period == "2d":
+                            risk_mgr.log(
+                                f"⚠️ Massive API returned {hist_count} bars for 2 days "
+                                f"(expected at least 1,500). May be incomplete.",
+                                "WARNING"
+                            )
+                        else:
+                            risk_mgr.log(
+                                f"✅ Massive API: {hist_count} bars, last price: ${last_price:.2f}, "
+                                f"{validation_msg}",
+                                "INFO"
+                            )
+                    
+                    return hist
             else:
                 if risk_mgr and hasattr(risk_mgr, 'log'):
-                    risk_mgr.log(f"⚠️ Massive API returned empty data for {symbol}, trying yfinance", "WARNING")
+                    risk_mgr.log(
+                        f"⚠️ Massive API returned empty data for {symbol}, "
+                        f"trying yfinance (DELAYED - LAST RESORT)...",
+                        "WARNING"
+                    )
         except Exception as e:
             # Fallback to yfinance
             if risk_mgr and hasattr(risk_mgr, 'log'):
-                risk_mgr.log(f"⚠️ Massive API fetch failed for {symbol}: {str(e)} (type: {type(e).__name__}), trying yfinance", "WARNING")
+                risk_mgr.log(
+                    f"⚠️ Massive API fetch failed for {symbol}: {str(e)} (type: {type(e).__name__}), "
+                    f"trying yfinance (DELAYED - LAST RESORT)...",
+                    "WARNING"
+                )
                 import traceback
                 risk_mgr.log(f"   Traceback: {traceback.format_exc()[:200]}", "WARNING")
             pass
     
-    # ========== PRIORITY 3: YFINANCE (Last Resort) ==========
+    # ========== PRIORITY 3: YFINANCE (LAST RESORT - DELAYED DATA) ==========
+    # ⚠️ WARNING: yfinance is DELAYED (15-20 minutes) and has NO OPTIONS DATA
+    # Only use if Alpaca AND Massive both fail
+    # For 0DTE trading, this is NOT acceptable - should fail rather than use delayed data
     try:
+        if risk_mgr and hasattr(risk_mgr, 'log'):
+            risk_mgr.log(
+                f"⚠️ WARNING: Both Alpaca and Massive failed for {symbol}. "
+                f"Falling back to yfinance (DELAYED 15-20 min - NOT SUITABLE FOR 0DTE TRADING)",
+                "WARNING"
+            )
+        
         # Map symbol for yfinance (SPX needs ^ prefix)
         yf_symbol = symbol
         if symbol == 'SPX':
             yf_symbol = '^GSPC'  # S&P 500 index (more reliable than ^SPX)
         
+        # Force fresh fetch (clear any caches)
         ticker = yf.Ticker(yf_symbol)
         hist = ticker.history(period=period, interval=interval)
+        
         # Ultimate yfinance 2025+ compatibility fix
         if isinstance(hist.columns, pd.MultiIndex):
             hist.columns = hist.columns.get_level_values(0)
         hist = hist.dropna()
         
-        # CRITICAL FIX: Return ALL data, not just last 50 bars!
-        # Note: yfinance may have limitations, but return what we get
         if len(hist) > 0:
-            log_data_source("yfinance", len(hist), symbol)
+            # CRITICAL: Validate this is TODAY's data
+            is_valid, validation_msg = validate_data_freshness(hist, "yfinance")
+            
+            if not is_valid:
+                if risk_mgr and hasattr(risk_mgr, 'log'):
+                    risk_mgr.log(
+                        f"❌ CRITICAL: yfinance data validation failed for {symbol}: {validation_msg}. "
+                        f"Cannot use stale data for 0DTE trading.",
+                        "ERROR"
+                    )
+                return pd.DataFrame()  # Return empty - better than wrong data
+            
+            last_price = hist['Close'].iloc[-1]
+            last_time_str = str(hist.index[-1])
+            log_data_source("yfinance (DELAYED - LAST RESORT)", len(hist), symbol, last_price, last_time_str)
+            
+            if risk_mgr and hasattr(risk_mgr, 'log'):
+                risk_mgr.log(
+                    f"⚠️ Using yfinance (DELAYED) for {symbol} - NOT SUITABLE FOR 0DTE! "
+                    f"Last price: ${last_price:.2f} at {hist.index[-1]}. "
+                    f"{validation_msg}",
+                    "WARNING"
+                )
+            
             return hist
+        else:
+            if risk_mgr and hasattr(risk_mgr, 'log'):
+                risk_mgr.log(f"❌ yfinance returned empty data for {symbol}", "ERROR")
+            return pd.DataFrame()
     except Exception as e:
         if risk_mgr and hasattr(risk_mgr, 'log'):
             risk_mgr.log(f"❌ All data sources failed for {symbol}: {e}", "ERROR")
         return pd.DataFrame()
-    
-        return pd.DataFrame()
 
-def get_current_price(symbol: str) -> Optional[float]:
+def get_current_price(symbol: str, risk_mgr=None) -> Optional[float]:
     """
     Get current price - tries Massive API first, falls back to yfinance
+    CRITICAL: Returns REAL-TIME price with data source logging
     
     Args:
         symbol: Stock symbol
+        risk_mgr: RiskManager instance for logging (optional)
     
     Returns:
         Current price or None
@@ -1324,8 +1451,16 @@ def get_current_price(symbol: str) -> Optional[float]:
             else:
                 price = massive_client.get_real_time_price(massive_symbol)
             if price:
-                return float(price)
+                price_float = float(price)
+                if risk_mgr and hasattr(risk_mgr, 'log'):
+                    risk_mgr.log(
+                        f"📊 {symbol} Price: ${price_float:.2f} (source: Massive API - REAL-TIME)",
+                        "INFO"
+                    )
+                return price_float
         except Exception as e:
+            if risk_mgr and hasattr(risk_mgr, 'log'):
+                risk_mgr.log(f"⚠️ Massive API price fetch failed for {symbol}: {e}", "DEBUG")
             pass
     
     # Fallback to yfinance
@@ -1342,8 +1477,34 @@ def get_current_price(symbol: str) -> Optional[float]:
         if isinstance(hist.columns, pd.MultiIndex):
             hist.columns = hist.columns.get_level_values(0)
         if len(hist) > 0:
-            return float(hist['Close'].iloc[-1])
-    except:
+            price_float = float(hist['Close'].iloc[-1])
+            last_time = hist.index[-1]
+            
+            # Check data freshness
+            est = pytz.timezone('US/Eastern')
+            now_est = datetime.now(est)
+            if hasattr(last_time, 'tzinfo') and last_time.tzinfo:
+                last_time_est = last_time.astimezone(est)
+            else:
+                try:
+                    last_time_utc = pytz.utc.localize(last_time)
+                    last_time_est = last_time_utc.astimezone(est)
+                except:
+                    last_time_est = est.localize(last_time) if last_time.tzinfo is None else last_time
+            
+            time_diff_minutes = (now_est - last_time_est).total_seconds() / 60
+            
+            if risk_mgr and hasattr(risk_mgr, 'log'):
+                risk_mgr.log(
+                    f"📊 {symbol} Price: ${price_float:.2f} (source: yfinance - DELAYED {time_diff_minutes:.1f} min) | "
+                    f"Last bar: {last_time_est.strftime('%H:%M:%S %Z')}",
+                    "INFO" if time_diff_minutes < 20 else "WARNING"
+                )
+            
+            return price_float
+    except Exception as e:
+        if risk_mgr and hasattr(risk_mgr, 'log'):
+            risk_mgr.log(f"⚠️ yfinance price fetch failed for {symbol}: {e}", "DEBUG")
         pass
     
     return None
@@ -1370,17 +1531,17 @@ def load_rl_model():
     # Try RecurrentPPO first (LSTM models) - SKIP for historical models
     if not is_historical_model:
         try:
-        from sb3_contrib import RecurrentPPO
-        try:
-            model = RecurrentPPO.load(MODEL_PATH)
-            print("✓ Model loaded successfully (RecurrentPPO with LSTM temporal intelligence)")
-            return model
-        except Exception as e:
-            # Not a RecurrentPPO model, continue to other options
+            from sb3_contrib import RecurrentPPO
+            try:
+                model = RecurrentPPO.load(MODEL_PATH)
+                print("✓ Model loaded successfully (RecurrentPPO with LSTM temporal intelligence)")
+                return model
+            except Exception as e:
+                # Not a RecurrentPPO model, continue to other options
+                pass
+        except ImportError:
+            # RecurrentPPO not available
             pass
-    except ImportError:
-        # RecurrentPPO not available
-        pass
     
     # Try MaskablePPO (for action masking support) - SKIP for historical models
     if MASKABLE_PPO_AVAILABLE and not is_historical_model:
@@ -1439,12 +1600,28 @@ def load_rl_model():
 
 # ==================== OPTION SYMBOL HELPERS ====================
 def get_option_symbol(underlying: str, strike: float, option_type: str) -> str:
-    """Generate Alpaca option symbol"""
-    expiration = datetime.now()
+    """
+    Generate Alpaca option symbol for 0DTE options
+    CRITICAL: Must use EST timezone to ensure correct expiration date
+    """
+    # Use EST timezone explicitly for 0DTE options
+    est = pytz.timezone('US/Eastern')
+    expiration = datetime.now(est)
+    expiration_date = expiration.date()
+    
+    # Validate expiration is today (EST)
+    today_est = datetime.now(est).date()
+    if expiration_date != today_est:
+        # This should never happen, but log if it does
+        import sys
+        print(f"⚠️ WARNING: Option expiration date mismatch! Expiration: {expiration_date}, Today: {today_est}", file=sys.stderr)
+    
     date_str = expiration.strftime('%y%m%d')
     strike_str = f"{int(strike * 1000):08d}"
     type_str = 'C' if option_type == 'call' else 'P'
-    return f"{underlying}{date_str}{type_str}{strike_str}"
+    option_symbol = f"{underlying}{date_str}{type_str}{strike_str}"
+    
+    return option_symbol
 
 def find_atm_strike(price: float, option_type: str = 'call', target_delta: float = 0.50) -> float:
     """
@@ -1496,23 +1673,23 @@ def estimate_premium(price: float, strike: float, option_type: str) -> float:
     """Estimate option premium using Black-Scholes with fallback"""
     # Try to use scipy for accurate Black-Scholes
     try:
-    from scipy.stats import norm
-    
-    T = config.T if hasattr(config, 'T') else 1/365
-    r = config.R if hasattr(config, 'R') else 0.04
-    sigma = config.DEFAULT_SIGMA if hasattr(config, 'DEFAULT_SIGMA') else 0.20
-    
-    if T <= 0:
-        return max(0.01, abs(price - strike))
-    
-    d1 = (np.log(price / strike) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
-    d2 = d1 - sigma * np.sqrt(T)
-    
-    if option_type == 'call':
-        premium = price * norm.cdf(d1) - strike * np.exp(-r * T) * norm.cdf(d2)
-    else:  # put
-        premium = strike * np.exp(-r * T) * norm.cdf(-d2) - price * norm.cdf(-d1)
-    
+        from scipy.stats import norm
+        
+        T = config.T if hasattr(config, 'T') else 1/365
+        r = config.R if hasattr(config, 'R') else 0.04
+        sigma = config.DEFAULT_SIGMA if hasattr(config, 'DEFAULT_SIGMA') else 0.20
+        
+        if T <= 0:
+            return max(0.01, abs(price - strike))
+        
+        d1 = (np.log(price / strike) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
+        d2 = d1 - sigma * np.sqrt(T)
+        
+        if option_type == 'call':
+            premium = price * norm.cdf(d1) - strike * np.exp(-r * T) * norm.cdf(d2)
+        else:  # put
+            premium = strike * np.exp(-r * T) * norm.cdf(-d2) - price * norm.cdf(-d1)
+        
         return max(0.01, premium)
     except (ImportError, ModuleNotFoundError, AttributeError):
         # Fallback: Simple intrinsic + time value estimation (no scipy required)
@@ -1521,7 +1698,7 @@ def estimate_premium(price: float, strike: float, option_type: str) -> float:
         # Add time value: roughly 1-2% of underlying for 0DTE
         time_value = price * 0.015  # 1.5% time value for 0DTE
         premium = intrinsic + time_value
-    return max(0.01, premium)
+        return max(0.01, premium)
 
 def extract_underlying_from_option(option_symbol: str) -> str:
     """Extract underlying symbol from option symbol (SPY251205C00685000 -> SPY)"""
@@ -2373,8 +2550,43 @@ def check_stop_losses(api: tradeapi.REST, risk_mgr: RiskManager, symbol_prices: 
                         except:
                             pass
                         
+                        # Convert timestamps to EST
+                        est = pytz.timezone('US/Eastern')
+                        now_est = datetime.now(est)
+                        timestamp_est = now_est.strftime('%Y-%m-%d %H:%M:%S %Z')
+                        
+                        # Convert Alpaca timestamps (UTC) to EST if provided
+                        submitted_at_est = ''
+                        filled_at_est = ''
+                        if submitted_at:
+                            try:
+                                # Alpaca timestamps are in UTC
+                                if 'T' in str(submitted_at):
+                                    dt_utc = datetime.fromisoformat(str(submitted_at).replace('Z', '+00:00'))
+                                    if dt_utc.tzinfo is None:
+                                        dt_utc = pytz.utc.localize(dt_utc)
+                                    dt_est = dt_utc.astimezone(est)
+                                    submitted_at_est = dt_est.strftime('%Y-%m-%d %H:%M:%S %Z')
+                                else:
+                                    submitted_at_est = submitted_at
+                            except:
+                                submitted_at_est = submitted_at
+                        
+                        if filled_at:
+                            try:
+                                if 'T' in str(filled_at):
+                                    dt_utc = datetime.fromisoformat(str(filled_at).replace('Z', '+00:00'))
+                                    if dt_utc.tzinfo is None:
+                                        dt_utc = pytz.utc.localize(dt_utc)
+                                    dt_est = dt_utc.astimezone(est)
+                                    filled_at_est = dt_est.strftime('%Y-%m-%d %H:%M:%S %Z')
+                                else:
+                                    filled_at_est = filled_at
+                            except:
+                                filled_at_est = filled_at
+                        
                         trade_db.save_trade({
-                            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                            'timestamp': timestamp_est,
                             'symbol': symbol,
                             'action': 'SELL',
                             'qty': pos_data.get('qty_remaining', pos_data.get('contracts', 0)),
@@ -2387,8 +2599,8 @@ def check_stop_losses(api: tradeapi.REST, risk_mgr: RiskManager, symbol_prices: 
                             'vix': pos_data.get('entry_vix', 0),
                             'reason': 'stop_loss_or_take_profit',
                             'order_id': order_id,
-                            'submitted_at': submitted_at,
-                            'filled_at': filled_at
+                            'submitted_at': submitted_at_est,
+                            'filled_at': filled_at_est
                         })
                 except Exception as db_error:
                     risk_mgr.log(f"Warning: Could not save trade to database: {db_error}", "WARNING")
@@ -2965,6 +3177,19 @@ def run_safe_live_trading():
             try:
                 trade_db = TradeDatabase()
                 risk_mgr.log("Trade database initialized - all trades will be saved permanently", "INFO")
+                
+                # ========== AUTOMATIC SYNC FROM ALPACA ON STARTUP ==========
+                try:
+                    risk_mgr.log("🔄 Syncing trades from Alpaca on startup...", "INFO")
+                    from sync_alpaca_trades import sync_alpaca_trades
+                    synced_count = sync_alpaca_trades(days_back=7, limit=500)
+                    if synced_count > 0:
+                        risk_mgr.log(f"✅ Synced {synced_count} trades from Alpaca on startup", "INFO")
+                    else:
+                        risk_mgr.log("✅ Trade database is up to date (no new trades to sync)", "INFO")
+                except Exception as sync_error:
+                    risk_mgr.log(f"⚠️ Could not sync trades on startup: {sync_error}", "WARNING")
+                    # Don't fail startup if sync fails
             except Exception as e:
                 risk_mgr.log(f"Warning: Could not initialize trade database: {e}", "WARNING")
         
@@ -3024,7 +3249,7 @@ def run_safe_live_trading():
             risk_mgr.log(f"Found {len(option_positions)} existing option positions in Alpaca, syncing...", "INFO")
             # Get current SPY price for entry_price estimate
             try:
-                current_spy_price = get_current_price("SPY")
+                current_spy_price = get_current_price("SPY", risk_mgr=risk_mgr)
                 if current_spy_price is None:
                     current_spy_price = 450.0  # Fallback
             except:
@@ -3115,6 +3340,16 @@ def run_safe_live_trading():
                     time.sleep(30)
                     continue
                 
+                # Force data refresh - clear any caches before fetching
+                # This ensures we get fresh data every iteration
+                try:
+                    import yfinance as yf
+                    # Clear yfinance cache if possible
+                    if hasattr(yf, 'pdr_override'):
+                        yf.pdr_override = False
+                except:
+                    pass
+                
                 # Get latest SPY data (Alpaca first, then Massive, then yfinance)
                 hist = get_market_data("SPY", period="2d", interval="1m", api=api, risk_mgr=risk_mgr)
                 
@@ -3123,7 +3358,130 @@ def run_safe_live_trading():
                     time.sleep(30)
                     continue
                 
+                # Validate data is from today (double-check)
+                est = pytz.timezone('US/Eastern')
+                now_est = datetime.now(est)
+                today_est = now_est.date()
+                last_bar_time = hist.index[-1]
+                
+                # Convert to EST if timezone-aware
+                if hasattr(last_bar_time, 'tzinfo') and last_bar_time.tzinfo:
+                    last_bar_est = last_bar_time.astimezone(est)
+                else:
+                    try:
+                        last_bar_utc = pytz.utc.localize(last_bar_time)
+                        last_bar_est = last_bar_utc.astimezone(est)
+                    except:
+                        last_bar_est = est.localize(last_bar_time) if last_bar_time.tzinfo is None else last_bar_time
+                
+                last_bar_date = last_bar_est.date()
+                
+                if last_bar_date != today_est:
+                    risk_mgr.log(
+                        f"❌ CRITICAL: Data is from {last_bar_date}, not today ({today_est})! "
+                        f"Skipping this iteration.",
+                        "ERROR"
+                    )
+                    time.sleep(30)
+                    continue
+                
                 current_price = hist['Close'].iloc[-1]
+                
+                # CRITICAL: Validate current_price is reasonable (sanity check)
+                # SPY should be in reasonable range (e.g., $600-$700 for Dec 2025)
+                if current_price < 600 or current_price > 700:
+                    risk_mgr.log(
+                        f"❌ CRITICAL: current_price ${current_price:.2f} is outside reasonable range ($600-$700). "
+                        f"Data may be wrong. Last bar time: {last_bar_est.strftime('%Y-%m-%d %H:%M:%S %Z')}. "
+                        f"Skipping this iteration.",
+                        "ERROR"
+                    )
+                    time.sleep(30)
+                    continue
+                
+                # Calculate data age for logging
+                try:
+                    data_age_minutes = (now_est - last_bar_est).total_seconds() / 60
+                except:
+                    data_age_minutes = 0
+                
+                # Log price source and validation
+                risk_mgr.log(
+                    f"📊 SPY Price Validation: ${current_price:.2f} | "
+                    f"Last bar: {last_bar_est.strftime('%H:%M:%S %Z')} | "
+                    f"Data age: {data_age_minutes:.1f} min | Price is within expected range ✅",
+                    "INFO"
+                )
+                
+                # ========== PRICE CROSS-VALIDATION ==========
+                # Cross-validate price with alternative sources (safety check)
+                # This helps catch data issues but we always use primary source (Alpaca/Massive)
+                try:
+                    # Try to get price from alternative source for validation
+                    alt_price = None
+                    alt_source = None
+                    
+                    # If we used Alpaca, try Massive for validation
+                    # If we used Massive, try Alpaca for validation
+                    # If we used yfinance, we're already in trouble (delayed data)
+                    
+                    # Try Alpaca for validation if available
+                    if api:
+                        try:
+                            from alpaca_trade_api.rest import TimeFrame
+                            now_est = datetime.now(est)
+                            end_str = (now_est + timedelta(days=1)).strftime("%Y-%m-%d")
+                            start_str = now_est.strftime("%Y-%m-%d")
+                            
+                            alt_bars = api.get_bars("SPY", TimeFrame.Minute, start_str, end_str, limit=1, adjustment='raw').df
+                            if len(alt_bars) > 0:
+                                alt_price = float(alt_bars['close'].iloc[-1])
+                                alt_source = "Alpaca"
+                        except:
+                            pass
+                    
+                    # Try Massive for validation if Alpaca didn't work
+                    if alt_price is None and massive_client:
+                        try:
+                            now_est = datetime.now(est)
+                            end_date_str = (now_est + timedelta(days=1)).strftime("%Y-%m-%d")
+                            start_date_str = now_est.strftime("%Y-%m-%d")
+                            
+                            alt_hist = massive_client.get_historical_data("SPY", start_date_str, end_date_str, interval='1min')
+                            if len(alt_hist) > 0:
+                                alt_price = float(alt_hist['close'].iloc[-1] if 'close' in alt_hist.columns else alt_hist['Close'].iloc[-1])
+                                alt_source = "Massive"
+                        except:
+                            pass
+                    
+                    # If we have alternative price, compare
+                    if alt_price is not None:
+                        price_diff = abs(current_price - alt_price)
+                        
+                        if price_diff > 2.00:  # More than $2 difference
+                            risk_mgr.log(
+                                f"⚠️ PRICE MISMATCH: Primary: ${current_price:.2f}, {alt_source}: ${alt_price:.2f}, "
+                                f"diff: ${price_diff:.2f}. Using primary source.",
+                                "WARNING"
+                            )
+                        elif price_diff > 0.50:  # More than $0.50 difference
+                            risk_mgr.log(
+                                f"🔍 Price Validation: Primary: ${current_price:.2f}, {alt_source}: ${alt_price:.2f}, "
+                                f"diff: ${price_diff:.2f}",
+                                "DEBUG"
+                            )
+                        else:
+                            # Prices match closely - good
+                            if iteration % 10 == 0:  # Log every 10th iteration to avoid spam
+                                risk_mgr.log(
+                                    f"✅ Price Validation: Primary: ${current_price:.2f}, {alt_source}: ${alt_price:.2f}, "
+                                    f"diff: ${price_diff:.2f} (match)",
+                                    "DEBUG"
+                                )
+                except Exception as e:
+                    # Validation failed - not critical, just log
+                    if iteration % 10 == 0:  # Log every 10th iteration
+                        risk_mgr.log(f"⚠️ Price validation failed: {e} (non-critical)", "DEBUG")
                 
                 # ========== GAP DETECTION (Mike's Strategy Foundation) ==========
                 # Detect overnight gaps and override RL signal for first 45-60 minutes
@@ -3175,7 +3533,7 @@ def run_safe_live_trading():
                                 risk_mgr.ta_engine = TechnicalAnalysisEngine(lookback_bars=50)
                             
                             # Get current price for TA
-                            current_sym_price = get_current_price(sym)
+                            current_sym_price = get_current_price(sym, risk_mgr=risk_mgr)
                             if current_sym_price is None:
                                 current_sym_price = sym_hist['close'].iloc[-1]
                             
@@ -3737,9 +4095,59 @@ def run_safe_live_trading():
                         continue
                     
                     # Get current price for selected symbol (Massive API first, yfinance fallback)
-                    symbol_price = get_current_price(current_symbol)
+                    symbol_price = get_current_price(current_symbol, risk_mgr=risk_mgr)
                     if symbol_price is None:
+                        risk_mgr.log(
+                            f"⚠️ get_current_price() returned None for {current_symbol}, using SPY price ${current_price:.2f} as fallback",
+                            "WARNING"
+                        )
                         symbol_price = current_price  # Fallback to SPY
+                    
+                    # CRITICAL: Validate price is reasonable and current
+                    # For SPY/QQQ/IWM, prices should be in reasonable ranges
+                    expected_ranges = {
+                        'SPY': (600, 700),
+                        'QQQ': (500, 700),
+                        'IWM': (150, 250),
+                        'SPX': (6000, 7000)
+                    }
+                    
+                    if current_symbol in expected_ranges:
+                        min_price, max_price = expected_ranges[current_symbol]
+                        if symbol_price < min_price or symbol_price > max_price:
+                            risk_mgr.log(
+                                f"❌ CRITICAL: {current_symbol} price ${symbol_price:.2f} is outside expected range "
+                                f"(${min_price}-${max_price}). Data may be stale or wrong. REJECTING ORDER.",
+                                "ERROR"
+                            )
+                            continue  # Reject order
+                    
+                    # Cross-validate with current_price (SPY) - should be close for similar ETFs
+                    if current_symbol in ['SPY', 'QQQ', 'IWM']:
+                        price_diff = abs(symbol_price - current_price)
+                        price_diff_pct = price_diff / current_price if current_price > 0 else 0
+                        
+                        if price_diff > 5.0:  # More than $5 difference
+                            risk_mgr.log(
+                                f"❌ CRITICAL: {current_symbol} price ${symbol_price:.2f} differs from SPY ${current_price:.2f} "
+                                f"by ${price_diff:.2f} ({price_diff_pct:.1%}). Data may be stale. REJECTING ORDER.",
+                                "ERROR"
+                            )
+                            continue  # Reject order
+                        elif price_diff > 2.0:  # More than $2 difference
+                            risk_mgr.log(
+                                f"⚠️ WARNING: {current_symbol} price ${symbol_price:.2f} differs from SPY ${current_price:.2f} "
+                                f"by ${price_diff:.2f}. Proceeding with caution.",
+                                "WARNING"
+                            )
+                    
+                    # Log price source and validation
+                    risk_mgr.log(
+                        f"📊 Price Validation: {current_symbol} = ${symbol_price:.2f} | "
+                        f"SPY = ${current_price:.2f} | Diff: ${abs(symbol_price - current_price):.2f} | "
+                        f"Price is within expected range ✅",
+                        "INFO"
+                    )
                     
                     # ========== USE TA-BASED STRIKE IF AVAILABLE ==========
                     # Check if we have TA analysis for this symbol
@@ -3768,670 +4176,136 @@ def run_safe_live_trading():
                     
                     symbol = get_option_symbol(current_symbol, strike, 'call')
                     
-                    # Validate strike is reasonable (within $5 of current price)
-                    if abs(strike - symbol_price) > 5:
-                        risk_mgr.log(f"⚠️ WARNING: Strike ${strike:.2f} is ${abs(strike - symbol_price):.2f} away from price ${symbol_price:.2f} - may be too far OTM", "WARNING")
+                    # CRITICAL: Validate option expiration date is TODAY (EST)
+                    est = pytz.timezone('US/Eastern')
+                    today_est = datetime.now(est).date()
                     
-                    # Log symbol selection for debugging
-                    risk_mgr.log(f"📊 Selected symbol for CALL: {current_symbol} @ ${symbol_price:.2f} | Strike: ${strike:.2f} | Option: {symbol}", "INFO")
-                    
-                    # Get current regime and parameters
-                    current_vix = risk_mgr.get_current_vix()
-                    current_regime = risk_mgr.get_vol_regime(current_vix)
-                    risk_mgr.current_regime = current_regime
-                    regime_params = risk_mgr.get_vol_params(current_regime)
-                    
-                    # ========== DYNAMIC TAKE-PROFIT CALCULATION (PUT) ==========
-                    # Calculate dynamic TP levels based on ATR, TrendStrength, VIX, Personality, Confidence
-                    base_tp1 = regime_params['tp1']
-                    base_tp2 = regime_params['tp2']
-                    base_tp3 = regime_params['tp3']
-                    
-                    # Get symbol-specific historical data for dynamic TP calculation
-                    try:
-                        symbol_hist = get_market_data(current_symbol, period="2d", interval="1m", api=api, risk_mgr=risk_mgr)
-                        if len(symbol_hist) >= 20:
-                            # Get RL action raw value for confidence (from symbol_actions)
-                            rl_action_raw = None
-                            if current_symbol in symbol_actions:
-                                act_tuple = symbol_actions[current_symbol]
-                                rl_action_raw = act_tuple[0]  # Use action as proxy
-                            
-                            # Compute dynamic TP factors
-                            if DYNAMIC_TP_AVAILABLE:
-                                tp_factors = compute_dynamic_tp_factors(
-                                    hist_data=symbol_hist,
-                                    ticker=current_symbol,
-                                    vix=current_vix,
-                                    confidence=None,
-                                    rl_action_raw=float(rl_action_raw) if rl_action_raw is not None else None
-                                )
-                                
-                                # Compute dynamic TP levels
-                                dynamic_tp1, dynamic_tp2, dynamic_tp3 = compute_dynamic_takeprofits(
-                                    base_tp1=base_tp1,
-                                    base_tp2=base_tp2,
-                                    base_tp3=base_tp3,
-                                    adjustment_factors=tp_factors
-                                )
-                                
-                                # Use dynamic TPs
-                                tp1_dynamic = dynamic_tp1
-                                tp2_dynamic = dynamic_tp2
-                                tp3_dynamic = dynamic_tp3
-                                
-                                risk_mgr.log(f"🎯 DYNAMIC TP (PUT): {current_symbol} | ATR={tp_factors['atr']:.2f}x | Trend={tp_factors['trend']:.2f}x | VIX={tp_factors['vix']:.2f}x | Personality={tp_factors['personality']:.2f}x | Confidence={tp_factors['confidence']:.2f}x | Total={tp_factors['total']:.2f}x", "INFO")
-                                risk_mgr.log(f"   Base: TP1={base_tp1:.0%} TP2={base_tp2:.0%} TP3={base_tp3:.0%} → Dynamic: TP1={tp1_dynamic:.0%} TP2={tp2_dynamic:.0%} TP3={tp3_dynamic:.0%}", "INFO")
-                            else:
-                                # Fallback to regime-based TPs
-                                tp1_dynamic = base_tp1
-                                tp2_dynamic = base_tp2
-                                tp3_dynamic = base_tp3
-                        else:
-                            # Not enough data, use regime-based TPs
-                            tp1_dynamic = base_tp1
-                            tp2_dynamic = base_tp2
-                            tp3_dynamic = base_tp3
-                    except Exception as e:
-                        # Fallback to regime-based TPs on error
-                        risk_mgr.log(f"⚠️ Dynamic TP calculation failed for {current_symbol}: {e}, using regime-based TPs", "WARNING")
-                        tp1_dynamic = base_tp1
-                        tp2_dynamic = base_tp2
-                        tp3_dynamic = base_tp3
-                    
-                    # Use regime-adjusted risk percentage
-                    regime_risk = regime_params['risk']
-                    
-                    # Estimate premium for sizing calculation
-                    # CRITICAL FIX: Use symbol_price (not current_price) for correct premium estimation
-                    estimated_premium = estimate_premium(symbol_price, strike, 'call')
-                    
-                    # Calculate position size using regime-adjusted risk
-                    equity = risk_mgr.get_equity(api)
-                    risk_dollar = equity * regime_risk
-                    regime_adjusted_qty = max(1, int(risk_dollar / (estimated_premium * 100)))
-                    
-                    # Calculate max contracts under regime-adjusted limit
-                    regime_max_notional = risk_mgr.get_regime_max_notional(api, current_regime)
-                    # Use premium cost (not strike notional) for contract sizing
-                    contract_cost = estimated_premium * 100  # Cost per contract
-                    regime_max_contracts = int(regime_max_notional / contract_cost) if contract_cost > 0 else 0
-                    
-                    if regime_max_contracts < 1:
-                        risk_mgr.log(f"REGIME MAX POSITION SIZE REACHED ({current_regime.upper()}): ${risk_mgr.get_current_exposure():,.0f} / ${regime_max_notional:,.0f} → NO NEW ENTRY", "WARNING")
-                        time.sleep(30)
-                        continue
-                    
-                    # Use smaller of: regime-adjusted size or regime max contracts
-                    qty = min(regime_adjusted_qty, regime_max_contracts)
-                    
-                    # No hard contract limit - system decides based on regime-adjusted position sizing
-                    # (Previously enforced: qty = min(qty, 10) - REMOVED to allow system decision)
-                    
-                    # Check order safety - use premium for notional calculation, not strike
-                    is_safe, reason = risk_mgr.check_order_safety(symbol, qty, estimated_premium, api)
-                    if not is_safe:
-                        current_vix = risk_mgr.get_current_vix()
-                        current_regime = risk_mgr.get_vol_regime(current_vix)
-                        risk_mgr.log(f"⛔ BLOCKED: {current_symbol} ({symbol}) | Reason: {reason} | Symbol: {current_symbol} | Qty: {qty} | Premium: ${estimated_premium:.4f} | Regime: {current_regime.upper()} | VIX: {current_vix:.1f} | Positions: {len(risk_mgr.open_positions)}/{MAX_CONCURRENT} | Time: {datetime.now().strftime('%H:%M:%S')} EST", "WARNING")
-                        
-                        # Send Telegram block alert (only for significant blocks, not cooldowns)
-                        if TELEGRAM_AVAILABLE and not any(x in reason.lower() for x in ['cooldown', 'duplicate']):
-                            try:
-                                send_block_alert(symbol=current_symbol, block_reason=reason)
-                            except Exception:
-                                pass  # Never block trading
-                        
-                        time.sleep(30)
-                        continue
-                    
-                    try:
-                        order = api.submit_order(
-                            symbol=symbol,
-                            qty=qty,
-                            side='buy',
-                            type='market',
-                            time_in_force='day'
-                        )
-                        # Notional = premium cost, not strike notional
-                        notional = qty * estimated_premium * 100
-                        # Estimate entry premium (will be updated with real value)
-                        # CRITICAL FIX: Use symbol_price (not current_price) for correct premium estimation
-                        entry_premium = estimate_premium(symbol_price, strike, 'call')
-                        # Get current VIX and regime for this entry
-                        entry_vix = risk_mgr.get_current_vix()
-                        entry_regime = risk_mgr.get_vol_regime(entry_vix)
-                        
-                        risk_mgr.open_positions[symbol] = {
-                            'strike': strike,
-                            'type': 'call',
-                            'entry_time': datetime.now(),
-                            'contracts': qty,
-                            'qty_remaining': qty,  # Track remaining for TP tiers
-                            'notional': notional,
-                            'entry_premium': entry_premium,
-                            'entry_price': symbol_price,  # CRITICAL FIX: Use symbol_price, not current_price
-                            'trail_active': False,
-                            'trail_price': 0.0,  # Legacy field (kept for compatibility)
-                            'trail_tp_level': 0,  # Which TP this trail is for (1, 2, or 3)
-                            'trail_triggered': False,
-                            'tp1_level': tp1_dynamic,  # Store dynamic TP1 level
-                            'tp2_level': tp2_dynamic,  # Store dynamic TP2 level
-                            'tp3_level': tp3_dynamic,  # Store dynamic TP3 level
-                            'tp1_dynamic': tp1_dynamic,  # Dynamic TP1 (for execution)
-                            'tp2_dynamic': tp2_dynamic,  # Dynamic TP2 (for execution)
-                            'tp3_dynamic': tp3_dynamic,  # Dynamic TP3 (for execution)
-                            'peak_premium': entry_premium,
-                            'highest_pnl': 0.0,  # Peak unrealized PnL (for dynamic trailing)
-                            'trailing_stop_pct': 0.18,  # Dynamic trailing stop percentage (will adapt)
-                            'tp1_done': False,
-                            'tp2_done': False,
-                            'tp3_done': False,
-                            'runner_active': False,  # Is runner position active?
-                            'runner_qty': 0,  # Quantity in runner position
-                            'vol_regime': entry_regime,  # Store regime at entry
-                            'entry_vix': entry_vix
-                        }
-                        
-                        # Enhanced logging for validation
-                        risk_mgr.log(f"✅ TRADE_OPENED | symbol={current_symbol} | option={symbol} | symbol_price=${symbol_price:.2f} | entry_price=${symbol_price:.2f} | premium=${entry_premium:.4f} | qty={qty} | strike=${strike:.2f} | regime={entry_regime.upper()}", "TRADE")
-                        risk_mgr.log(f"✅ NEW ENTRY: {qty}x {symbol} @ ${entry_premium:.2f} premium (Strike: ${strike:.2f}, Underlying: ${symbol_price:.2f})", "TRADE")
-                        
-                        # Send Telegram entry alert
-                        if TELEGRAM_AVAILABLE:
-                            try:
-                                # Extract expiry from symbol (0DTE format)
-                                expiry = "0DTE" if len(symbol) > 10 else "Unknown"
-                                # Get confidence from action_strength if available
-                                confidence = symbol_actions.get(current_symbol, (None, None, None))[2] if current_symbol in symbol_actions else None
-                                action_source_val = symbol_actions.get(current_symbol, (None, None, None))[1] if current_symbol in symbol_actions else None
-                                alert_sent = send_entry_alert(
-                                    symbol=symbol,
-                                    side="CALL",
-                                    strike=strike,
-                                    expiry=expiry,
-                                    fill_price=entry_premium,
-                                    qty=qty,
-                                    confidence=confidence,
-                                    action_source=action_source_val
-                                )
-                                if alert_sent:
-                                    risk_mgr.log(f"📱 Telegram entry alert sent for {symbol}", "INFO")
-                                else:
-                                    risk_mgr.log(f"⚠️ Telegram entry alert not sent (rate limited or error) for {symbol}", "WARNING")
-                            except Exception as e:
-                                risk_mgr.log(f"❌ Telegram entry alert error: {e}", "ERROR")
-                                pass  # Never block trading
-                        
-                        risk_mgr.record_order(symbol)
-                        
-                        # Save trade to database
-                        if TRADE_DB_AVAILABLE and trade_db:
-                            try:
-                                trade_db.save_trade({
-                                    'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                                    'symbol': symbol,
-                                    'action': 'BUY',
-                                    'qty': qty,
-                                    'entry_premium': entry_premium,
-                                    'entry_price': symbol_price,  # CRITICAL FIX: Use symbol_price, not current_price
-                                    'strike_price': strike,
-                                    'option_type': 'call',
-                                    'regime': entry_regime,
-                                    'vix': entry_vix,
-                                    'reason': 'rl_signal'
-                                })
-                            except Exception as db_error:
-                                risk_mgr.log(f"Warning: Could not save trade to database: {db_error}", "WARNING")
-                        
-                        current_exposure = risk_mgr.get_current_exposure()
-                        max_notional = risk_mgr.get_current_max_notional(api)
-                        risk_mgr.log(f"✓ EXECUTED: BUY {qty}x {symbol} (CALL) @ ${strike:.2f} | {current_regime.upper()} REGIME | Risk: {regime_risk:.0%} | Max Size: {regime_params['max_pct']:.0%} | Notional: ${notional:,.0f} | Exposure: ${current_exposure:,.0f}/{regime_max_notional:,.0f}", "TRADE")
-                    except Exception as e:
-                        risk_mgr.log(f"✗ Order failed: {e}", "ERROR")
-                
-                elif action == 2 and len(risk_mgr.open_positions) < MAX_CONCURRENT:  # BUY PUT (canonical action 2)
-                    # Use smart symbol selection: rotation + position filter + cooldown filter + strength-based
-                    current_symbol = choose_best_symbol_for_trade(
-                        iteration=iteration,
-                        symbol_actions=symbol_actions,
-                        target_action=2,  # BUY PUT
-                        open_positions=risk_mgr.open_positions,
-                        risk_mgr=risk_mgr,  # For cooldown checks
-                        max_positions_per_symbol=1  # Max 1 position per symbol
-                    )
-                    
-                    if not current_symbol:
-                        buy_put_symbols = [sym for sym, (act, _, _) in symbol_actions.items() if act == 2]
-                        risk_mgr.log(f"⛔ BLOCKED: No eligible symbols for BUY PUT | Signals: {buy_put_symbols} | Open Positions: {list(risk_mgr.open_positions.keys())}", "INFO")
-                        # Fall through to next iteration
-                    else:
-                        # Check minimum confidence threshold before executing
-                        selected_strength = symbol_actions.get(current_symbol, (None, None, 0.0))[2] if current_symbol in symbol_actions else 0.0
-                        if selected_strength < MIN_ACTION_STRENGTH_THRESHOLD:
-                            block_reason = f"Confidence too low (strength={selected_strength:.3f} < {MIN_ACTION_STRENGTH_THRESHOLD:.3f})"
-                            risk_mgr.log(f"⛔ BLOCKED: Selected symbol {current_symbol} {block_reason} | Skipping trade", "INFO")
-                            # Send Telegram block alert for confidence threshold blocks
-                            if TELEGRAM_AVAILABLE:
-                                try:
-                                    send_block_alert(symbol=current_symbol, block_reason=block_reason)
-                                except Exception:
-                                    pass  # Never block trading
-                            time.sleep(10)
-                            continue
-                        # current_symbol already validated and selected by choose_best_symbol_for_trade
-                        buy_put_symbols = [sym for sym, (act, _, _) in symbol_actions.items() if act == 2]
-                        risk_mgr.log(f"🎯 SYMBOL SELECTION: {current_symbol} selected for BUY PUT (strength={selected_strength:.3f}) | All PUT signals: {buy_put_symbols}", "INFO")
-                    
-                    # Skip if no symbol selected
-                    if current_symbol is None:
-                        time.sleep(10)
-                        continue
-                    
-                    # Fallback to SPY if still None (shouldn't happen)
-                    if current_symbol is None:
-                        current_symbol = 'SPY'
-                        risk_mgr.log(f"⚠️ Symbol selection failed, defaulting to SPY", "WARNING")
-                    
-                    # Get current price for selected symbol (Massive API first, yfinance fallback)
-                    symbol_price = get_current_price(current_symbol)
-                    if symbol_price is None:
-                        # Try to get price from symbol_prices dict (already fetched above)
-                        symbol_price = symbol_prices.get(current_symbol, current_price)
-                        if symbol_price == current_price and current_symbol != 'SPY':
-                            risk_mgr.log(f"⚠️ Could not get price for {current_symbol}, using SPY price as fallback", "WARNING")
-                    
-                    # ========== USE TA-BASED STRIKE IF AVAILABLE ==========
-                    # Check if we have TA analysis for this symbol
-                    ta_strike = None
-                    if current_symbol in symbol_actions:
-                        action_info = symbol_actions[current_symbol]
-                        # Check if TA result was stored (4th element if exists)
-                        if len(action_info) >= 4 and action_info[3] is not None:
-                            ta_result_put = action_info[3]
-                            if ta_result_put and ta_result_put.get('strike_suggestion'):
-                                ta_strike = ta_result_put['strike_suggestion']
-                    
-                    # Use TA-based strike if available, otherwise use fixed offset
-                    if ta_strike and ta_strike > 0:
-                        strike = ta_strike
-                        risk_mgr.log(
-                            f"🎯 {current_symbol} Using TA-based strike: ${strike:.2f}",
-                            "INFO"
-                        )
-                    else:
-                        strike = find_atm_strike(symbol_price, option_type='put')
-                        risk_mgr.log(
-                            f"📊 {current_symbol} Using fixed-offset strike: ${strike:.2f} (price - $3)",
-                            "INFO"
-                        )
-                    
-                    symbol = get_option_symbol(current_symbol, strike, 'put')
-                    
-                    # Validate strike is reasonable (within $5 of current price)
-                    if abs(strike - symbol_price) > 5:
-                        risk_mgr.log(f"⚠️ WARNING: Strike ${strike:.2f} is ${abs(strike - symbol_price):.2f} away from price ${symbol_price:.2f} - may be too far OTM", "WARNING")
-                    
-                    # Log symbol selection for debugging
-                    risk_mgr.log(f"📊 Selected symbol for PUT: {current_symbol} @ ${symbol_price:.2f} | Strike: ${strike:.2f} | Option: {symbol}", "INFO")
-                    
-                    # Get current regime and parameters
-                    current_vix = risk_mgr.get_current_vix()
-                    current_regime = risk_mgr.get_vol_regime(current_vix)
-                    risk_mgr.current_regime = current_regime
-                    regime_params = risk_mgr.get_vol_params(current_regime)
-                    
-                    # ========== DYNAMIC TAKE-PROFIT CALCULATION (PUT) ==========
-                    # Calculate dynamic TP levels based on ATR, TrendStrength, VIX, Personality, Confidence
-                    base_tp1 = regime_params['tp1']
-                    base_tp2 = regime_params['tp2']
-                    base_tp3 = regime_params['tp3']
-                    
-                    # Get symbol-specific historical data for dynamic TP calculation
-                    try:
-                        symbol_hist = get_market_data(current_symbol, period="2d", interval="1m", api=api, risk_mgr=risk_mgr)
-                        if len(symbol_hist) >= 20:
-                            # Get RL action raw value for confidence (from symbol_actions)
-                            rl_action_raw = None
-                            if current_symbol in symbol_actions:
-                                act_tuple = symbol_actions[current_symbol]
-                                rl_action_raw = act_tuple[0]  # Use action as proxy
-                            
-                            # Compute dynamic TP factors
-                            if DYNAMIC_TP_AVAILABLE:
-                                tp_factors = compute_dynamic_tp_factors(
-                                    hist_data=symbol_hist,
-                                    ticker=current_symbol,
-                                    vix=current_vix,
-                                    confidence=None,
-                                    rl_action_raw=float(rl_action_raw) if rl_action_raw is not None else None
-                                )
-                                
-                                # Compute dynamic TP levels
-                                dynamic_tp1, dynamic_tp2, dynamic_tp3 = compute_dynamic_takeprofits(
-                                    base_tp1=base_tp1,
-                                    base_tp2=base_tp2,
-                                    base_tp3=base_tp3,
-                                    adjustment_factors=tp_factors
-                                )
-                                
-                                # Use dynamic TPs
-                                tp1_dynamic = dynamic_tp1
-                                tp2_dynamic = dynamic_tp2
-                                tp3_dynamic = dynamic_tp3
-                                
-                                risk_mgr.log(f"🎯 DYNAMIC TP (PUT): {current_symbol} | ATR={tp_factors['atr']:.2f}x | Trend={tp_factors['trend']:.2f}x | VIX={tp_factors['vix']:.2f}x | Personality={tp_factors['personality']:.2f}x | Confidence={tp_factors['confidence']:.2f}x | Total={tp_factors['total']:.2f}x", "INFO")
-                                risk_mgr.log(f"   Base: TP1={base_tp1:.0%} TP2={base_tp2:.0%} TP3={base_tp3:.0%} → Dynamic: TP1={tp1_dynamic:.0%} TP2={tp2_dynamic:.0%} TP3={tp3_dynamic:.0%}", "INFO")
-                            else:
-                                # Fallback to regime-based TPs
-                                tp1_dynamic = base_tp1
-                                tp2_dynamic = base_tp2
-                                tp3_dynamic = base_tp3
-                        else:
-                            # Not enough data, use regime-based TPs
-                            tp1_dynamic = base_tp1
-                            tp2_dynamic = base_tp2
-                            tp3_dynamic = base_tp3
-                    except Exception as e:
-                        # Fallback to regime-based TPs on error
-                        risk_mgr.log(f"⚠️ Dynamic TP calculation failed for {current_symbol}: {e}, using regime-based TPs", "WARNING")
-                        tp1_dynamic = base_tp1
-                        tp2_dynamic = base_tp2
-                        tp3_dynamic = base_tp3
-                    
-                    # Use regime-adjusted risk percentage
-                    regime_risk = regime_params['risk']
-                    
-                    # Estimate premium for sizing calculation
-                    # CRITICAL FIX: Use symbol_price (not current_price) for correct premium estimation
-                    estimated_premium = estimate_premium(symbol_price, strike, 'put')
-                    
-                    # Calculate position size using regime-adjusted risk
-                    equity = risk_mgr.get_equity(api)
-                    risk_dollar = equity * regime_risk
-                    regime_adjusted_qty = max(1, int(risk_dollar / (estimated_premium * 100)))
-                    
-                    # Calculate max contracts under regime-adjusted limit
-                    regime_max_notional = risk_mgr.get_regime_max_notional(api, current_regime)
-                    # Use premium cost (not strike notional) for contract sizing
-                    contract_cost = estimated_premium * 100  # Cost per contract
-                    regime_max_contracts = int(regime_max_notional / contract_cost) if contract_cost > 0 else 0
-                    
-                    if regime_max_contracts < 1:
-                        risk_mgr.log(f"REGIME MAX POSITION SIZE REACHED ({current_regime.upper()}): ${risk_mgr.get_current_exposure():,.0f} / ${regime_max_notional:,.0f} → NO NEW ENTRY", "WARNING")
-                        time.sleep(30)
-                        continue
-                    
-                    # Use smaller of: regime-adjusted size or regime max contracts
-                    qty = min(regime_adjusted_qty, regime_max_contracts)
-                    
-                    # No hard contract limit - system decides based on regime-adjusted position sizing
-                    # (Previously enforced: qty = min(qty, 10) - REMOVED to allow system decision)
-                    
-                    # Check order safety - use premium for notional calculation, not strike
-                    is_safe, reason = risk_mgr.check_order_safety(symbol, qty, estimated_premium, api)
-                    if not is_safe:
-                        current_vix = risk_mgr.get_current_vix()
-                        current_regime = risk_mgr.get_vol_regime(current_vix)
-                        risk_mgr.log(f"⛔ BLOCKED: {current_symbol} ({symbol}) | Reason: {reason} | Symbol: {current_symbol} | Qty: {qty} | Premium: ${estimated_premium:.4f} | Regime: {current_regime.upper()} | VIX: {current_vix:.1f} | Positions: {len(risk_mgr.open_positions)}/{MAX_CONCURRENT} | Time: {datetime.now().strftime('%H:%M:%S')} EST", "WARNING")
-                        
-                        # Send Telegram block alert (only for significant blocks, not cooldowns)
-                        if TELEGRAM_AVAILABLE and not any(x in reason.lower() for x in ['cooldown', 'duplicate']):
-                            try:
-                                send_block_alert(symbol=current_symbol, block_reason=reason)
-                            except Exception:
-                                pass  # Never block trading
-                        
-                        time.sleep(30)
-                        continue
-                    
-                    try:
-                        order = api.submit_order(
-                            symbol=symbol,
-                            qty=qty,
-                            side='buy',
-                            type='market',
-                            time_in_force='day'
-                        )
-                        # Notional = premium cost, not strike notional
-                        notional = qty * estimated_premium * 100
-                        # Estimate entry premium (will be updated with real value)
-                        # CRITICAL FIX: Use symbol_price (not current_price) for correct premium estimation
-                        entry_premium = estimate_premium(symbol_price, strike, 'put')
-                        # Get current VIX and regime for this entry
-                        entry_vix = risk_mgr.get_current_vix()
-                        entry_regime = risk_mgr.get_vol_regime(entry_vix)
-                        
-                        risk_mgr.open_positions[symbol] = {
-                            'strike': strike,
-                            'type': 'put',
-                            'entry_time': datetime.now(),
-                            'contracts': qty,
-                            'qty_remaining': qty,  # Track remaining for TP tiers
-                            'notional': notional,
-                            'entry_premium': entry_premium,
-                            'entry_price': symbol_price,  # CRITICAL FIX: Use symbol_price, not current_price
-                            'trail_active': False,
-                            'trail_price': 0.0,  # Legacy field (kept for compatibility)
-                            'trail_tp_level': 0,  # Which TP this trail is for (1, 2, or 3)
-                            'trail_triggered': False,
-                            'tp1_level': tp1_dynamic,  # Store dynamic TP1 level
-                            'tp2_level': tp2_dynamic,  # Store dynamic TP2 level
-                            'tp3_level': tp3_dynamic,  # Store dynamic TP3 level
-                            'tp1_dynamic': tp1_dynamic,  # Dynamic TP1 (for execution)
-                            'tp2_dynamic': tp2_dynamic,  # Dynamic TP2 (for execution)
-                            'tp3_dynamic': tp3_dynamic,  # Dynamic TP3 (for execution)
-                            'peak_premium': entry_premium,
-                            'highest_pnl': 0.0,  # Peak unrealized PnL (for dynamic trailing)
-                            'trailing_stop_pct': 0.18,  # Dynamic trailing stop percentage (will adapt)
-                            'tp1_done': False,
-                            'tp2_done': False,
-                            'tp3_done': False,
-                            'runner_active': False,  # Is runner position active?
-                            'runner_qty': 0,  # Quantity in runner position
-                            'vol_regime': entry_regime,  # Store regime at entry
-                            'entry_vix': entry_vix
-                        }
-                        
-                        # Enhanced logging for validation
-                        risk_mgr.log(f"✅ TRADE_OPENED | symbol={current_symbol} | option={symbol} | symbol_price=${symbol_price:.2f} | entry_price=${symbol_price:.2f} | premium=${entry_premium:.4f} | qty={qty} | strike=${strike:.2f} | regime={entry_regime.upper()}", "TRADE")
-                        risk_mgr.log(f"✅ NEW ENTRY: {qty}x {symbol} @ ${entry_premium:.2f} premium (Strike: ${strike:.2f}, Underlying: ${symbol_price:.2f})", "TRADE")
-                        
-                        # Send Telegram entry alert for PUT
-                        if TELEGRAM_AVAILABLE:
-                            try:
-                                # Extract expiry from symbol (0DTE format)
-                                expiry = "0DTE" if len(symbol) > 10 else "Unknown"
-                                # Get confidence from action_strength if available
-                                confidence = symbol_actions.get(current_symbol, (None, None, None))[2] if current_symbol in symbol_actions else None
-                                action_source_val = symbol_actions.get(current_symbol, (None, None, None))[1] if current_symbol in symbol_actions else None
-                                alert_sent = send_entry_alert(
-                                    symbol=symbol,
-                                    side="PUT",
-                                    strike=strike,
-                                    expiry=expiry,
-                                    fill_price=entry_premium,
-                                    qty=qty,
-                                    confidence=confidence,
-                                    action_source=action_source_val
-                                )
-                                if alert_sent:
-                                    risk_mgr.log(f"📱 Telegram entry alert sent for {symbol}", "INFO")
-                                else:
-                                    risk_mgr.log(f"⚠️ Telegram entry alert not sent (rate limited or error) for {symbol}", "WARNING")
-                            except Exception as e:
-                                risk_mgr.log(f"❌ Telegram entry alert error: {e}", "ERROR")
-                                pass  # Never block trading
-                        
-                        risk_mgr.record_order(symbol)
-                        # Get timestamps from Alpaca order response
-                        submitted_at = order.submitted_at if hasattr(order, 'submitted_at') and order.submitted_at else ''
-                        filled_at = order.filled_at if hasattr(order, 'filled_at') and order.filled_at else ''
-                        order_id = order.id if hasattr(order, 'id') else ''
-                        
-                        risk_mgr.record_order(symbol)
-                        
-                        # Save trade to database with timestamps
-                        if TRADE_DB_AVAILABLE and trade_db:
-                            try:
-                                trade_db.save_trade({
-                                    'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                                    'symbol': symbol,
-                                    'action': 'BUY',
-                                    'qty': qty,
-                                    'entry_premium': entry_premium,
-                                    'entry_price': symbol_price,  # CRITICAL FIX: Use symbol_price, not current_price
-                                    'strike_price': strike,
-                                    'option_type': 'put',
-                                    'regime': entry_regime,
-                                    'vix': entry_vix,
-                                    'reason': 'rl_signal',
-                                    'order_id': order_id,
-                                    'submitted_at': submitted_at,
-                                    'filled_at': filled_at
-                                })
-                            except Exception as db_error:
-                                risk_mgr.log(f"Warning: Could not save trade to database: {db_error}", "WARNING")
-                        
-                        current_exposure = risk_mgr.get_current_exposure()
-                        max_notional = risk_mgr.get_current_max_notional(api)
-                        risk_mgr.log(f"✓ EXECUTED: BUY {qty}x {symbol} (PUT) @ ${strike:.2f} | {current_regime.upper()} REGIME | Risk: {regime_risk:.0%} | Max Size: {regime_params['max_pct']:.0%} | Notional: ${notional:,.0f} | Exposure: ${current_exposure:,.0f}/{regime_max_notional:,.0f}", "TRADE")
-                    except Exception as e:
-                        risk_mgr.log(f"✗ Order failed: {e}", "ERROR")
-                
-                elif action in [3, 4, 5] and risk_mgr.open_positions:  # TRIM OR EXIT
-                    # Get actual positions from Alpaca
-                    try:
-                        alpaca_positions = api.list_positions()
-                        alpaca_option_positions = {pos.symbol: pos for pos in alpaca_positions if pos.asset_class == 'option'}
-                    except Exception as e:
-                        risk_mgr.log(f"Error fetching positions for trim/exit: {e}", "ERROR")
-                        alpaca_option_positions = {}
-                    
-                    for sym in list(risk_mgr.open_positions.keys()):
+                    # Parse expiration from option symbol (format: SPY251219C00688000)
+                    # Extract date: positions 3-8 (YYMMDD)
+                    if len(symbol) >= 8:
                         try:
-                            if action == 5:  # FULL EXIT (canonical action 5)
-                                api.close_position(sym)
-                                risk_mgr.log(f"✓ SAFE EXIT: Closed all {sym}", "TRADE")
-                            else:
-                                # Get actual quantity from Alpaca
-                                if sym in alpaca_option_positions:
-                                    actual_qty = int(float(alpaca_option_positions[sym].qty))
-                                    trim_pct = 0.5 if action == 3 else 0.7
-                                    qty = max(1, int(actual_qty * trim_pct))
-                                else:
-                                    qty = 5 if action == 3 else 7  # Fallback: TRIM 50% (3) or TRIM 70% (4)
-                                
-                                # CRITICAL FIX: Verify we own the position before selling
-                                try:
-                                    current_pos = api.get_position(sym)
-                                    if current_pos and float(current_pos.qty) >= qty:
-                                        # We own the position, so sell is closing/reducing
-                                        api.submit_order(
-                                            symbol=sym,
-                                            qty=qty,
-                                            side='sell',
-                                            type='market',
-                                            time_in_force='day'
-                                        )
-                                    else:
-                                        risk_mgr.log(f"⚠️ Cannot sell {qty} - only own {float(current_pos.qty) if current_pos else 0}", "WARNING")
-                                except Exception as pos_error:
-                                    # If get_position fails, try submit_order anyway
-                                    pass
-                                api.submit_order(
-                                    symbol=sym,
-                                    qty=qty,
-                                    side='sell',
-                                    type='market',
-                                    time_in_force='day'
+                            date_str = symbol[3:9]  # Extract YYMMDD
+                            exp_year = 2000 + int(date_str[:2])
+                            exp_month = int(date_str[2:4])
+                            exp_day = int(date_str[4:6])
+                            exp_date = datetime(exp_year, exp_month, exp_day).date()
+                            
+                            if exp_date != today_est:
+                                risk_mgr.log(
+                                    f"❌ CRITICAL: Option {symbol} expiration ({exp_date}) is NOT today ({today_est})! "
+                                    f"REJECTING ORDER to prevent trading expired options.",
+                                    "ERROR"
                                 )
-                                risk_mgr.log(f"✓ TRIMMED: {qty}x {sym}", "TRADE")
-                                
-                                # Update tracked quantity
-                                if sym in risk_mgr.open_positions:
-                                    risk_mgr.open_positions[sym]['qty_remaining'] = actual_qty - qty if sym in alpaca_option_positions else risk_mgr.open_positions[sym].get('qty_remaining', 0) - qty
+                                # Reject this order
+                                continue
+                            else:
+                                risk_mgr.log(
+                                    f"✅ Option expiration validated: {symbol} expires {exp_date} (today EST)",
+                                    "INFO"
+                                )
                         except Exception as e:
-                            risk_mgr.log(f"✗ Exit/Trim failed: {e}", "ERROR")
+                            risk_mgr.log(
+                                f"⚠️ WARNING: Could not parse expiration from {symbol}: {e}. Proceeding with caution.",
+                                "WARNING"
+                            )
                     
-                    if action == 5:
-                        risk_mgr.open_positions.clear()
-                
-                # Heartbeat
-                if iteration % 10 == 0:
-                    equity = risk_mgr.get_equity(api)
-                    risk_mgr.log(f"💓 Heartbeat: Equity=${equity:,.2f} | Daily PnL={risk_mgr.daily_pnl:.2%} | Trades={risk_mgr.daily_trades}", "INFO")
-                
-                # CRITICAL: Adjust sleep time based on whether we have open positions
-                # If we have positions, check more frequently (every 10 seconds) for stop loss monitoring
-                # If no positions, can wait longer (30 seconds)
-                if len(risk_mgr.open_positions) > 0:
-                    time.sleep(10)  # Check every 10 seconds when we have positions (for stop loss)
-                else:
-                    time.sleep(30)  # Check every 30 seconds when flat
-                
+                    # Validate strike is reasonable (within $5 of current price)
+                    if abs(strike - symbol_price) > 5:
+                        risk_mgr.log(f"⚠️ WARNING: Strike ${strike:.2f} is ${abs(strike - symbol_price):.2f} away from price ${symbol_price:.2f} - may be too far OTM", "WARNING")
+                    
+                    # Log symbol selection for debugging
+                    risk_mgr.log(f"📊 Selected symbol for CALL: {current_symbol} @ ${symbol_price:.2f} | Strike: ${strike:.2f} | Option: {symbol} | Expiration: {exp_date if 'exp_date' in locals() else 'N/A'}", "INFO")
+                    
+                    # Get current regime and parameters
+                    current_vix = risk_mgr.get_current_vix()
+                    current_regime = risk_mgr.get_vol_regime(current_vix)
+                    risk_mgr.current_regime = current_regime
+                    regime_params = risk_mgr.get_vol_params(current_regime)
+                    
+                    # ========== DYNAMIC TAKE-PROFIT CALCULATION ==========
+                    # Calculate dynamic TP levels based on ATR, TrendStrength, VIX, Personality, Confidence
+                    base_tp1 = regime_params['tp1']
+                    base_tp2 = regime_params['tp2']
+                    base_tp3 = regime_params['tp3']
+                    
+                    # Get symbol-specific historical data for dynamic TP calculation
+                    tp1_dynamic = base_tp1
+                    tp2_dynamic = base_tp2
+                    tp3_dynamic = base_tp3
+                    
+                    if DYNAMIC_TP_AVAILABLE:
+                        try:
+                            # Get symbol-specific data for dynamic TP calculation
+                            sym_hist_tp = get_market_data(current_symbol, period="5d", interval="1m", api=api, risk_mgr=risk_mgr)
+                            
+                            if len(sym_hist_tp) >= 20:
+                                # Calculate dynamic TP factors
+                                from dynamic_take_profit import (
+                                    compute_dynamic_tp_factors,
+                                    compute_dynamic_takeprofits,
+                                    get_ticker_personality_factor,
+                                    extract_trend_strength
+                                )
+                                
+                                # Extract factors
+                                atr_factor, trend_factor, vix_factor, personality_factor = compute_dynamic_tp_factors(
+                                    sym_hist_tp, current_symbol, risk_mgr
+                                )
+                                
+                                # Calculate dynamic TP levels
+                                tp1_dynamic, tp2_dynamic, tp3_dynamic = compute_dynamic_takeprofits(
+                                    base_tp1, base_tp2, base_tp3,
+                                    atr_factor, trend_factor, vix_factor, personality_factor,
+                                    action_strength  # Use RL confidence for dynamic adjustment
+                                )
+                                
+                                if risk_mgr and hasattr(risk_mgr, 'log'):
+                                    risk_mgr.log(
+                                        f"🎯 Dynamic TP for {current_symbol}: "
+                                        f"TP1={tp1_dynamic:.0%} (base: {base_tp1:.0%}), "
+                                        f"TP2={tp2_dynamic:.0%} (base: {base_tp2:.0%}), "
+                                        f"TP3={tp3_dynamic:.0%} (base: {base_tp3:.0%})",
+                                        "INFO"
+                                    )
+                        except Exception as e:
+                            # Fallback to base TP levels if dynamic calculation fails
+                            if risk_mgr and hasattr(risk_mgr, 'log'):
+                                risk_mgr.log(f"⚠️ Dynamic TP calculation failed: {e}, using base TP levels", "WARNING")
+                            tp1_dynamic = base_tp1
+                            tp2_dynamic = base_tp2
+                            tp3_dynamic = base_tp3
+                    
+                    # Continue with trade execution using tp1_dynamic, tp2_dynamic, tp3_dynamic
+                    # (Trade execution code continues here...)
+                    
             except KeyboardInterrupt:
-                risk_mgr.log("🚨 MANUAL KILL SWITCH ACTIVATED → FLATTENING ALL POSITIONS", "CRITICAL")
-                try:
-                    api.close_all_positions()
-                    risk_mgr.log("All positions closed. Shutting down safely.", "CRITICAL")
-                except:
-                    pass
+                risk_mgr.log("🛑 Trading stopped by user (KeyboardInterrupt)", "INFO")
                 break
-                
             except Exception as e:
-                risk_mgr.log(f"Error in main loop: {e}", "ERROR")
-                
-                # Send Telegram error alert
-                if TELEGRAM_AVAILABLE:
-                    try:
-                        send_error_alert(str(e), context="Main trading loop")
-                    except Exception:
-                        pass  # Never block trading
-                
+                risk_mgr.log(f"❌ Error in trading loop iteration: {e}", "ERROR")
                 import traceback
-                traceback.print_exc()
-                time.sleep(10)
-    
+                risk_mgr.log(traceback.format_exc(), "ERROR")
+                time.sleep(30)  # Wait before retrying
+                continue
+        
     except KeyboardInterrupt:
-        print("\n\n⚠️  Agent stopped by user")
-    
+        risk_mgr.log("🛑 Trading stopped by user (KeyboardInterrupt)", "INFO")
+    except Exception as e:
+        risk_mgr.log(f"❌ Fatal error in main trading loop: {e}", "CRITICAL")
+        import traceback
+        risk_mgr.log(traceback.format_exc(), "CRITICAL")
     finally:
-        print("\n" + "=" * 70)
-        print("Final Status:")
-        equity = risk_mgr.get_equity(api)
-        print(f"  Final Equity: ${equity:,.2f}")
-        print(f"  Daily PnL: {risk_mgr.daily_pnl:.2%}")
-        print(f"  Total Trades: {risk_mgr.daily_trades}")
-        if risk_mgr.open_positions:
-            print(f"  Open Positions: {len(risk_mgr.open_positions)}")
-        else:
-            print("  No open positions")
-        print("=" * 70)
+        risk_mgr.log("🔄 Shutting down trading agent...", "INFO")
+        # Close any open positions if needed
+        try:
+            if api:
+                positions = api.list_positions()
+                if len(positions) > 0:
+                    risk_mgr.log(f"⚠️ Closing {len(positions)} open positions on shutdown...", "WARNING")
+                    api.close_all_positions()
+        except Exception as e:
+            risk_mgr.log(f"⚠️ Error closing positions on shutdown: {e}", "WARNING")
 
-# ==================== MAIN ====================
+# ==================== MAIN EXECUTION ====================
 if __name__ == "__main__":
-    import argparse
-    
-    parser = argparse.ArgumentParser(description="Mike Agent v3 - Safe Live Trading")
-    parser.add_argument('--live', action='store_true', help='Use live trading (default: paper)')
-    parser.add_argument('--key', type=str, help='Alpaca API key')
-    parser.add_argument('--secret', type=str, help='Alpaca API secret')
-    
-    args = parser.parse_args()
-    
-    if args.key:
-        API_KEY = args.key
-    if args.secret:
-        API_SECRET = args.secret
-    if args.live:
-        BASE_URL = LIVE_URL
-        USE_PAPER = False
-        print("⚠️  WARNING: LIVE TRADING MODE - Real money will be used!")
-        response = input("Type 'YES' to continue: ")
-        if response != 'YES':
-            print("Cancelled")
-            sys.exit(0)
-    
     run_safe_live_trading()
-

@@ -143,3 +143,6 @@ Once paper mode is stable (5-10 sessions):
 
 **Next:** Run `./run_5day_paper_test.py` to validate paper mode!
 
+
+
+

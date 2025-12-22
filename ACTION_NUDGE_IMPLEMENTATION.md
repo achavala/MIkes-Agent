@@ -129,3 +129,6 @@
 
 The system should now generate trades even with weak signals.
 
+
+
+

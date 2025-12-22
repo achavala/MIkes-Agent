@@ -119,3 +119,6 @@ def prepare_observation_10_features(data: pd.DataFrame, risk_mgr, symbol: str = 
     
     return np.clip(obs, -10.0, 10.0)
 
+
+
+

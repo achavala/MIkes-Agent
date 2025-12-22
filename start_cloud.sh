@@ -4,11 +4,16 @@
 
 set -e  # Exit on error
 
-echo "🚀 Starting Cloud Deployment on PORT ${PORT:-8080}"
+# Get port from Fly.io environment variable (required for HTTP service)
+PORT=${PORT:-8080}
+echo "🚀 Starting Cloud Deployment on PORT ${PORT}"
 
 # Set Python path to include user-installed packages
 export PYTHONPATH=/root/.local/lib/python3.11/site-packages:$PYTHONPATH
 export PATH=/root/.local/bin:$PATH
+
+# Ensure PORT is exported for child processes
+export PORT
 
 # Get Git version info (if available)
 GIT_VERSION=$(git describe --tags --exact-match 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -179,17 +184,21 @@ else
 fi
 
 # Start Streamlit dashboard first (it's the HTTP service Fly.io expects)
-export STREAMLIT_SERVER_PORT=${PORT:-8080}
+# Use PORT from environment (set by Fly.io) or default to 8080
+STREAMLIT_PORT=${PORT:-8080}
+export STREAMLIT_SERVER_PORT=${STREAMLIT_PORT}
 export STREAMLIT_SERVER_ADDRESS=0.0.0.0
 export STREAMLIT_SERVER_HEADLESS=true
 
-echo "📊 Starting Streamlit dashboard on port ${STREAMLIT_SERVER_PORT}..."
+echo "📊 Starting Streamlit dashboard on port ${STREAMLIT_PORT} (address: 0.0.0.0)..."
 streamlit run dashboard_app.py \
-    --server.port=${STREAMLIT_SERVER_PORT} \
+    --server.port=${STREAMLIT_PORT} \
     --server.address=0.0.0.0 \
     --server.headless=true \
     --server.enableCORS=false \
-    --server.enableXsrfProtection=false &
+    --server.enableXsrfProtection=false \
+    --server.runOnSave=false \
+    --server.fileWatcherType=none &
 DASHBOARD_PID=$!
 
 # Wait a moment for dashboard to start

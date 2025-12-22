@@ -447,3 +447,6 @@ The training data is split by **volatility regimes** based on VIX:
 
 **The model is trained. Now it needs to be tuned and monitored. 🎯**
 
+
+
+

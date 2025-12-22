@@ -153,3 +153,6 @@ fly logs --app mike-agent-project --no-tail | grep -iE "model|agent|trading|alpa
 
 **All deployment issues resolved!** 🎉
 
+
+
+

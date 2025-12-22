@@ -146,3 +146,6 @@ All components implemented, tested, and integrated into the live trading system.
 - Fine-tune regime detection thresholds
 - Add performance-based adaptive weighting
 
+
+
+
