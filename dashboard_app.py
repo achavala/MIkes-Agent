@@ -1964,7 +1964,8 @@ def render_live_activity():
         
         # Filter by time range
         if time_range != "All":
-            now = datetime.now(pytz.timezone('US/Eastern'))
+            est = pytz.timezone('US/Eastern')
+            now = datetime.now(est)
             time_map = {
                 "Last 5 minutes": timedelta(minutes=5),
                 "Last 15 minutes": timedelta(minutes=15),
@@ -1972,7 +1973,24 @@ def render_live_activity():
                 "Last hour": timedelta(hours=1)
             }
             cutoff = now - time_map.get(time_range, timedelta(minutes=30))
-            activities = [a for a in activities if a.get('timestamp', now) >= cutoff]
+            
+            # Filter activities, ensuring all timestamps are timezone-aware
+            filtered_activities = []
+            for a in activities:
+                ts = a.get('timestamp', now)
+                # Ensure timestamp is timezone-aware (EST)
+                if ts.tzinfo is None:
+                    # If naive, assume it's EST and localize
+                    ts = est.localize(ts)
+                else:
+                    # If aware, convert to EST
+                    ts = ts.astimezone(est)
+                
+                # Now safe to compare
+                if ts >= cutoff:
+                    a['timestamp'] = ts  # Update with timezone-aware version
+                    filtered_activities.append(a)
+            activities = filtered_activities
         
         if activities:
             st.success(f"📊 Showing {len(activities)} recent activities")
@@ -2001,9 +2019,15 @@ def render_live_activity():
             
             # Prepare data for display
             display_data = []
+            est = pytz.timezone('US/Eastern')
             for activity in activities:
-                timestamp = activity.get('timestamp', datetime.now())
+                timestamp = activity.get('timestamp', datetime.now(est))
+                # Ensure timestamp is timezone-aware
                 if isinstance(timestamp, datetime):
+                    if timestamp.tzinfo is None:
+                        timestamp = est.localize(timestamp)
+                    else:
+                        timestamp = timestamp.astimezone(est)
                     time_str = timestamp.strftime('%H:%M:%S')
                 else:
                     time_str = str(timestamp)
@@ -2063,6 +2087,85 @@ def render_live_activity():
         else:
             st.warning("No activities found. Make sure the agent is running and generating logs.")
             st.info(f"Looking for log file: {activity_log.log_file}")
+            
+            # Show log file status and help debug
+            import os
+            if os.path.exists(activity_log.log_file):
+                file_size = os.path.getsize(activity_log.log_file)
+                st.info(f"✅ Log file exists ({file_size:,} bytes)")
+                
+                # Try to show last few lines for debugging
+                try:
+                    with open(activity_log.log_file, 'r', encoding='utf-8', errors='ignore') as f:
+                        lines = f.readlines()
+                        if lines:
+                            st.code(f"Last 3 lines from log:\n" + "".join(lines[-3:]), language=None)
+                            
+                            # Try parsing to see if we get activities
+                            test_activities = activity_log.parse_log_file(max_lines=100)
+                            if test_activities:
+                                st.success(f"✅ Successfully parsed {len(test_activities)} activities from log file")
+                                st.info("Try adjusting filters or time range to see them.")
+                            else:
+                                st.warning("⚠️ Log file exists but no activities were parsed. Check log format.")
+                except Exception as e:
+                    st.warning(f"Could not read log file: {e}")
+            else:
+                st.error(f"❌ Log file does not exist: {activity_log.log_file}")
+                st.info("The agent needs to be running to generate logs.")
+                
+                # Suggest alternative locations
+                alt_logs = [
+                    f"logs/mike_agent_safe_{datetime.now(pytz.timezone('US/Eastern')).strftime('%Y%m%d')}.log",
+                    "agent_output.log",
+                    "/tmp/agent.log"
+                ]
+                st.info("Checking alternative log locations...")
+                for alt_log in alt_logs:
+                    if os.path.exists(alt_log):
+                        st.success(f"✅ Found alternative log: {alt_log}")
+                        st.info("Try refreshing or restarting the dashboard to use this log file.")
+                        break
+            
+            # Show log file status and help debug
+            import os
+            if os.path.exists(activity_log.log_file):
+                file_size = os.path.getsize(activity_log.log_file)
+                st.info(f"✅ Log file exists: {activity_log.log_file} ({file_size:,} bytes)")
+                
+                # Try to show last few lines for debugging
+                try:
+                    with open(activity_log.log_file, 'r', encoding='utf-8', errors='ignore') as f:
+                        lines = f.readlines()
+                        if lines:
+                            st.code(f"Last 3 lines from log:\n" + "".join(lines[-3:]), language=None)
+                            
+                            # Try parsing to see if we get activities
+                            test_activities = activity_log.parse_log_file(max_lines=100)
+                            if test_activities:
+                                st.success(f"✅ Successfully parsed {len(test_activities)} activities from log file")
+                                st.info("Try adjusting filters or time range to see them.")
+                            else:
+                                st.warning("⚠️ Log file exists but no activities were parsed. Check log format.")
+                except Exception as e:
+                    st.warning(f"Could not read log file: {e}")
+            else:
+                st.error(f"❌ Log file does not exist: {activity_log.log_file}")
+                st.info("The agent needs to be running to generate logs.")
+                
+                # Suggest alternative locations
+                est = pytz.timezone('US/Eastern')
+                alt_logs = [
+                    f"logs/mike_agent_safe_{datetime.now(est).strftime('%Y%m%d')}.log",
+                    "agent_output.log",
+                    "/tmp/agent.log"
+                ]
+                st.info("Checking alternative log locations...")
+                for alt_log in alt_logs:
+                    if os.path.exists(alt_log):
+                        st.success(f"✅ Found alternative log: {alt_log}")
+                        st.info("Try refreshing or restarting the dashboard to use this log file.")
+                        break
     
     except ImportError:
         st.error("Live activity log module not found. Install live_activity_log.py")

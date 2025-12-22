@@ -17,20 +17,33 @@ class LiveActivityLog:
     
     def __init__(self, log_file: Optional[str] = None):
         """Initialize with log file path"""
+        self.est = pytz.timezone('US/Eastern')
+        now_est = datetime.now(self.est)
+        
         if log_file is None:
-            # Try to find today's log file
-            daily_log = f"logs/mike_agent_safe_{datetime.now().strftime('%Y%m%d')}.log"
-            if os.path.exists(daily_log):
-                self.log_file = daily_log
-            elif os.path.exists("agent_output.log"):
-                self.log_file = "agent_output.log"
+            # Try to find today's log file (priority order)
+            daily_log = f"logs/mike_agent_safe_{now_est.strftime('%Y%m%d')}.log"
+            
+            # Check multiple possible log locations in priority order
+            log_candidates = [
+                daily_log,  # Today's daily log (highest priority)
+                "agent_output.log",  # Fallback log
+                "/tmp/agent.log",  # Fly.io container log
+                f"logs/agent_{now_est.strftime('%Y%m%d')}.log",  # Alternative daily log
+            ]
+            
+            # Use first existing log file
+            for candidate in log_candidates:
+                if os.path.exists(candidate):
+                    self.log_file = candidate
+                    break
             else:
+                # If none found, use daily log (will show empty if doesn't exist)
                 self.log_file = daily_log
         else:
             self.log_file = log_file
         
-        self.est = pytz.timezone('US/Eastern')
-        self.today = datetime.now(self.est).date()
+        self.today = now_est.date()
     
     def parse_log_file(self, max_lines: int = 500) -> List[Dict]:
         """Parse log file and extract activity events"""
@@ -89,7 +102,7 @@ class LiveActivityLog:
         }
     
     def extract_timestamp(self, line: str) -> datetime:
-        """Extract timestamp from log line"""
+        """Extract timestamp from log line - ALWAYS returns timezone-aware datetime (EST)"""
         # Try multiple timestamp formats
         patterns = [
             r'(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})',  # 2025-12-22 10:30:00
@@ -103,15 +116,27 @@ class LiveActivityLog:
                 try:
                     time_str = match.group(1)
                     if len(time_str) > 8:  # Full datetime
-                        return datetime.strptime(time_str, '%Y-%m-%d %H:%M:%S')
+                        # Parse as naive, then make timezone-aware (EST)
+                        dt = datetime.strptime(time_str, '%Y-%m-%d %H:%M:%S')
+                        # If already timezone-aware, convert to EST; otherwise localize to EST
+                        if dt.tzinfo is None:
+                            dt = self.est.localize(dt)
+                        else:
+                            dt = dt.astimezone(self.est)
+                        return dt
                     else:  # Time only
                         today = datetime.now(self.est).replace(hour=0, minute=0, second=0, microsecond=0)
                         time_parts = time_str.split(':')
-                        return today.replace(hour=int(time_parts[0]), minute=int(time_parts[1]), second=int(time_parts[2]))
-                except:
+                        dt = today.replace(hour=int(time_parts[0]), minute=int(time_parts[1]), second=int(time_parts[2]))
+                        # Ensure timezone-aware
+                        if dt.tzinfo is None:
+                            dt = self.est.localize(dt)
+                        return dt
+                except Exception as e:
+                    # Log error but continue
                     pass
         
-        # Default to now if no timestamp found
+        # Default to now if no timestamp found - ALWAYS timezone-aware (EST)
         return datetime.now(self.est)
     
     def classify_activity(self, message: str, level: str) -> Optional[str]:
