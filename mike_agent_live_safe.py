@@ -463,6 +463,9 @@ class RiskManager:
         self.current_vix = 20.0
         self.current_regime = "normal_vol"
         self.last_reset_date: Optional[str] = None  # Track last reset date for daily reset
+        self.current_trading_day: Optional[datetime.date] = None  # Track current trading day from Alpaca clock
+        self.option_cache: Dict[str, Any] = {}  # Cache for option symbols (cleared on new day)
+        self.last_trade_symbols: set = set()  # Track last traded symbols (cleared on new day)
         
         # Create logs directory
         os.makedirs("logs", exist_ok=True)
@@ -471,20 +474,23 @@ class RiskManager:
         now_est = datetime.now(est)
         self.log_file = f"logs/mike_agent_safe_{now_est.strftime('%Y%m%d')}.log"
     
-    def reset_daily_state(self) -> None:
+    def reset_daily_state(self, trading_day: datetime.date) -> None:
         """
-        Reset daily state at midnight
-        Called automatically on day change
+        Reset daily state on new trading day
+        Called automatically when Alpaca clock detects new trading day
         CRITICAL: Cooldowns must reset to allow new day trading
+        
+        Args:
+            trading_day: Current trading day from Alpaca clock (EST date)
         """
-        # Use EST for all timestamps
-        est = pytz.timezone('US/Eastern')
-        now_est = datetime.now(est)
-        today = now_est.strftime('%Y-%m-%d')
-        if self.last_reset_date == today:
+        today_str = trading_day.strftime('%Y-%m-%d')
+        if self.last_reset_date == today_str:
             return  # Already reset today
         
-        self.last_reset_date = today
+        self.log(f"🔄 NEW TRADING DAY DETECTED: {today_str} | Resetting all daily state", "INFO")
+        
+        self.last_reset_date = today_str
+        self.current_trading_day = trading_day
         self.daily_trades = 0
         self.symbol_trade_counts = {}
         self.daily_pnl = 0.0
@@ -497,7 +503,11 @@ class RiskManager:
         self.last_order_time = {}
         self.last_any_trade_time = None
         
-        self.log(f"🔄 Daily reset: All cooldowns cleared, daily counters reset", "INFO")
+        # CRITICAL: Clear option cache and last traded symbols to prevent stale contracts
+        self.option_cache.clear()
+        self.last_trade_symbols.clear()
+        
+        self.log(f"✅ Daily reset complete: All cooldowns cleared, option cache cleared, daily counters reset", "INFO")
     
     def get_current_vix(self) -> float:
         """Get current VIX level (try Massive API first, fallback to yfinance)"""
@@ -1666,24 +1676,31 @@ def load_rl_model():
         )
 
 # ==================== OPTION SYMBOL HELPERS ====================
-def get_option_symbol(underlying: str, strike: float, option_type: str) -> str:
+def get_option_symbol(underlying: str, strike: float, option_type: str, trading_day: Optional[datetime.date] = None) -> str:
     """
     Generate Alpaca option symbol for 0DTE options
-    CRITICAL: Must use EST timezone to ensure correct expiration date
+    CRITICAL: Must use trading_day from Alpaca clock to ensure correct expiration date
+    
+    Args:
+        underlying: Underlying symbol (SPY, QQQ, IWM)
+        strike: Strike price
+        option_type: 'call' or 'put'
+        trading_day: Current trading day from Alpaca clock (EST date). If None, uses local EST (not recommended)
+    
+    Returns:
+        Option symbol string (e.g., SPY251220C00680000)
     """
-    # Use EST timezone explicitly for 0DTE options
-    est = pytz.timezone('US/Eastern')
-    expiration = datetime.now(est)
-    expiration_date = expiration.date()
-    
-    # Validate expiration is today (EST)
-    today_est = datetime.now(est).date()
-    if expiration_date != today_est:
-        # This should never happen, but log if it does
+    # Use trading_day from Alpaca clock if provided (RECOMMENDED)
+    if trading_day is not None:
+        expiration_date = trading_day
+    else:
+        # Fallback to local EST (NOT RECOMMENDED - should use Alpaca clock)
+        est = pytz.timezone('US/Eastern')
+        expiration_date = datetime.now(est).date()
         import sys
-        print(f"⚠️ WARNING: Option expiration date mismatch! Expiration: {expiration_date}, Today: {today_est}", file=sys.stderr)
+        print(f"⚠️ WARNING: get_option_symbol() called without trading_day parameter. Using local EST: {expiration_date}", file=sys.stderr)
     
-    date_str = expiration.strftime('%y%m%d')
+    date_str = expiration_date.strftime('%y%m%d')
     strike_str = f"{int(strike * 1000):08d}"
     type_str = 'C' if option_type == 'call' else 'P'
     option_symbol = f"{underlying}{date_str}{type_str}{strike_str}"
@@ -3413,6 +3430,60 @@ def run_safe_live_trading():
             iteration += 1
             
             try:
+                # ========== ALPACA CLOCK (AUTHORITATIVE SOURCE OF TRUTH) ==========
+                # CRITICAL: Use Alpaca clock for "today" - broker clock is the only authoritative source
+                # This prevents wrong-day trading if OS clock drifts or multiple machines disagree
+                try:
+                    clock = api.get_clock()
+                    now_utc = clock.timestamp  # UTC timestamp from Alpaca
+                    est = pytz.timezone('US/Eastern')
+                    now_est = now_utc.astimezone(est)
+                    today_est = now_est.date()  # Today's date from Alpaca clock (EST)
+                    
+                    # Log Alpaca clock for validation (every 10th iteration to avoid spam)
+                    if iteration % 10 == 0:
+                        risk_mgr.log(
+                            f"⏰ ALPACA_CLOCK_EST = {now_est.strftime('%Y-%m-%d %H:%M:%S %Z')} | "
+                            f"Market Open: {clock.is_open} | Today: {today_est}",
+                            "INFO"
+                        )
+                    
+                    # Check if market is open (don't trade when closed)
+                    if not clock.is_open:
+                        if iteration % 20 == 0:  # Log every 20th iteration when market is closed
+                            risk_mgr.log(
+                                f"⏸️  Market is CLOSED (Alpaca clock) | Next open: {clock.next_open} | Next close: {clock.next_close}",
+                                "INFO"
+                            )
+                        time.sleep(60)  # Wait longer when market is closed
+                        continue
+                    
+                except Exception as clock_error:
+                    risk_mgr.log(
+                        f"❌ CRITICAL: Could not get Alpaca clock: {clock_error} | "
+                        f"Falling back to local EST (NOT RECOMMENDED)",
+                        "ERROR"
+                    )
+                    # Fallback to local EST (not ideal, but better than crashing)
+                    est = pytz.timezone('US/Eastern')
+                    now_est = datetime.now(est)
+                    today_est = now_est.date()
+                
+                # ========== DAILY RESET CHECK (PREVENTS STALE OPTION SYMBOLS) ==========
+                # CRITICAL: Reset daily state when new trading day detected from Alpaca clock
+                # This prevents Dec 5/Dec 10 symbols from leaking into Dec 19
+                if risk_mgr.current_trading_day != today_est:
+                    risk_mgr.log(
+                        f"🔄 NEW_TRADING_DAY = {today_est} | Previous: {risk_mgr.current_trading_day} | "
+                        f"Executing daily reset...",
+                        "INFO"
+                    )
+                    risk_mgr.reset_daily_state(today_est)
+                    risk_mgr.log(
+                        f"✅ RESET_DAILY_STATE executed | Option cache cleared | All cooldowns reset",
+                        "INFO"
+                    )
+                
                 # ========== SAFEGUARD CHECK ==========
                 can_trade, reason = risk_mgr.check_safeguards(api)
                 
@@ -3440,10 +3511,8 @@ def run_safe_live_trading():
                     time.sleep(30)
                     continue
                 
-                # Validate data is from today (double-check)
-                est = pytz.timezone('US/Eastern')
-                now_est = datetime.now(est)
-                today_est = now_est.date()
+                # Validate data is from today (double-check using Alpaca clock date)
+                # Note: today_est is already set from Alpaca clock above
                 last_bar_time = hist.index[-1]
                 
                 # Convert to EST if timezone-aware
@@ -4256,11 +4325,10 @@ def run_safe_live_trading():
                             "INFO"
                         )
                     
-                    symbol = get_option_symbol(current_symbol, strike, 'call')
+                    symbol = get_option_symbol(current_symbol, strike, 'call', trading_day=today_est)
                     
-                    # CRITICAL: Validate option expiration date is TODAY (EST)
-                    est = pytz.timezone('US/Eastern')
-                    today_est = datetime.now(est).date()
+                    # CRITICAL: Validate option expiration date is TODAY (from Alpaca clock)
+                    # Note: today_est is already set from Alpaca clock above
                     
                     # Parse expiration from option symbol (format: SPY251219C00688000)
                     # Extract date: positions 3-8 (YYMMDD)
