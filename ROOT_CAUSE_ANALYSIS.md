@@ -267,3 +267,4 @@ def boost_confidence_for_pattern(pattern, base_confidence):
 
 
 
+

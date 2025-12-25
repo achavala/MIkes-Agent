@@ -227,3 +227,4 @@ fly logs --app mike-agent-project | grep -E "Error|Failed|Exception|Traceback"
 
 
 
+

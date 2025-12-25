@@ -158,3 +158,4 @@ if ta_result['patterns']:
 
 
 
+

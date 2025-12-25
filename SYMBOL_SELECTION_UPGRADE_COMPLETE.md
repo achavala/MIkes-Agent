@@ -392,3 +392,4 @@ grep "TRADE EXECUTED" logs/agent_*.log | grep -E "QQQ|SPX"
 
 
 
+

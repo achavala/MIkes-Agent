@@ -360,3 +360,4 @@ fly logs --app mike-agent-project | grep -i "model"
 
 **Your system is currently downloading models from a URL when the container starts. This is a valid and working approach!**
 
+

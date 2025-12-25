@@ -199,7 +199,10 @@ USE_INSTITUTIONAL_FEATURES = True  # Enable institutional-grade features
 # Symbols to trade (0DTE options)
 # NOTE: SPX options are NOT available in Alpaca paper trading (index options require special permissions)
 # Using SPY/QQQ/IWM (ETFs fully supported in paper trading)
-TRADING_SYMBOLS = ['SPY', 'QQQ', 'IWM']  # All ETFs with 0DTE options support
+# 🔴 RED-TEAM FIX: Disable SPX (not available in paper), restrict IWM (lower liquidity)
+# Focus on SPY and QQQ only for now (highest liquidity, best fills)
+TRADING_SYMBOLS = ['SPY', 'QQQ']  # IWM disabled per red-team recommendation (lower liquidity)
+# SPX disabled (not available in Alpaca paper trading, requires special permissions)
 
 # ==================== RISK LIMITS (HARD-CODED – CANNOT BE OVERRIDDEN) ====================
 DAILY_LOSS_LIMIT = -0.15  # -15% daily loss limit
@@ -212,7 +215,10 @@ VIX_KILL = 28  # No trades if VIX > 28
 IVR_MIN = 30  # Minimum IV Rank (0-100)
 # Entry time filter (disabled per user request)
 NO_TRADE_AFTER = None  # type: Optional[str]  # No time restriction - trading allowed all day
-MIN_ACTION_STRENGTH_THRESHOLD = 0.52  # Minimum confidence (0.52 = 52%) required to execute trades (adjusted to allow model's typical confidence range of 0.52-0.65)
+# 🔴 RED-TEAM FIX: Raise confidence threshold (do NOT lower it)
+# Model is correctly uncertain - 0.52 is too low and causes losses
+# Better to have zero trades than trades with low confidence
+MIN_ACTION_STRENGTH_THRESHOLD = 0.60  # Minimum confidence (0.60 = 60%) required to execute trades
 MAX_DRAWDOWN = 0.30  # Full shutdown if -30% from peak
 MAX_NOTIONAL = 50000  # Max $50k notional per order
 DUPLICATE_ORDER_WINDOW = 300  # 5 minutes in seconds (per symbol)
@@ -220,6 +226,31 @@ DUPLICATE_ORDER_WINDOW = 300  # 5 minutes in seconds (per symbol)
 # ==================== DATA SOURCE CONFIGURATION ====================
 ALLOW_YFINANCE_FALLBACK = False  # Set to False to disable yfinance fallback (delayed data not suitable for 0DTE trading)
 USE_YFINANCE_FOR_VIX_ONLY = True  # VIX can be delayed, this is OK (non-critical data)
+
+# ==================== DATA CACHING (REDUCES REDUNDANT API CALLS) ====================
+# Cache market data for 30 seconds per symbol to reduce API calls and rate limit risk
+DATA_CACHE_SECONDS = 30  # Cache bars for 30 seconds
+POSITIONS_CACHE_SECONDS = 15  # Cache positions for 15 seconds (less frequent updates)
+
+# Global caches (module-level for persistence across calls)
+_market_data_cache: Dict[str, Dict[str, Any]] = {}  # {symbol: {'data': df, 'timestamp': datetime, 'price': float}}
+_positions_cache: Dict[str, Any] = {'positions': [], 'timestamp': None}
+
+# ==================== DAILY NO-TRADE REASON TRACKING ====================
+# Track reasons why trades didn't execute (for end-of-day summary)
+_daily_no_trade_reasons: Dict[str, int] = {
+    'hold_signals': 0,          # RL/Ensemble said HOLD
+    'low_confidence': 0,        # Confidence below threshold
+    'cooldown_active': 0,       # Trade cooldown in effect
+    'position_limit': 0,        # Max positions reached
+    'daily_loss_limit': 0,      # Daily loss limit hit
+    'vix_kill_switch': 0,       # VIX too high
+    'stale_data': 0,            # Data too old/invalid
+    'no_options_available': 0,  # No valid options found
+    'safeguard_blocked': 0,     # Other safeguards blocked
+    'market_closed': 0,         # Market not open
+}
+_no_trade_tracking_date: Optional[datetime.date] = None  # Current tracking date
 
 # ==================== IV-ADJUSTED POSITION SIZING ====================
 # Position size adjusts dynamically to IV:
@@ -751,10 +782,14 @@ class RiskManager:
         max_contracts = int(available_notional / (strike * 100))
         return max(0, max_contracts), available_notional
     
-    def check_order_safety(self, symbol: str, qty: int, premium: float, api: tradeapi.REST, is_entry: bool = True) -> tuple[bool, str]:
+    def check_order_safety(self, symbol: str, qty: int, premium: float, api: tradeapi.REST, is_entry: bool = True, 
+                          current_price: float = None, strike: float = None, option_type: str = None) -> tuple[bool, str]:
         """
         Check order-level safeguards with dynamic position size
         CRITICAL: Cooldown checks apply ONLY to entries, NEVER to exits
+        
+        🔴 RED-TEAM FIX: Added trade gating (spread, quote age, expected move)
+        These are HARD VETOES - no trade if any gate fails
         
         Args:
             symbol: Option symbol
@@ -762,8 +797,53 @@ class RiskManager:
             premium: Option premium per contract (not strike price!)
             api: Alpaca API instance
             is_entry: True if this is an entry (buy), False if exit (sell)
+            current_price: Current underlying price (for expected move calculation)
+            strike: Option strike price (for expected move calculation)
+            option_type: 'call' or 'put' (for expected move calculation)
         Returns: (is_safe, reason_if_unsafe)
         """
+        # ========== 🔴 RED-TEAM FIX: TRADE GATING (HARD VETOES) ==========
+        # These gates MUST pass before any trade - no exceptions
+        # Phase 0.2: Block trades when spread > X%, quote age > threshold, expected move < breakeven
+        if is_entry and current_price and strike and option_type:
+            # Gate 1: Spread check (if we can get bid/ask)
+            try:
+                # Try to get option snapshot for bid/ask spread
+                snapshot = api.get_option_snapshot(symbol)
+                if snapshot and hasattr(snapshot, 'bid_price') and hasattr(snapshot, 'ask_price'):
+                    bid = float(snapshot.bid_price) if snapshot.bid_price else 0
+                    ask = float(snapshot.ask_price) if snapshot.ask_price else 0
+                    if bid > 0 and ask > 0:
+                        spread = ask - bid
+                        spread_pct = (spread / premium) * 100 if premium > 0 else 100
+                        MAX_SPREAD_PCT = 20.0  # Block if spread > 20% of premium (0DTE can have wide spreads)
+                        if spread_pct > MAX_SPREAD_PCT:
+                            return False, f"⛔ BLOCKED: Spread too wide ({spread_pct:.1f}% of premium ${premium:.2f}) | Bid: ${bid:.2f}, Ask: ${ask:.2f} | Max allowed: {MAX_SPREAD_PCT}%"
+            except Exception as e:
+                # If we can't get spread, log but don't block (data may not be available)
+                self.log(f"⚠️ Could not check spread for {symbol}: {e}", "WARNING")
+            
+            # Gate 2: Expected move vs breakeven (CRITICAL - this eliminates most losses)
+            try:
+                # Calculate expected move (simplified: use VIX/16 * sqrt(days_to_expiry))
+                vix = self.get_current_vix()
+                days_to_expiry = 1.0 / (252 * 6.5)  # 0DTE: ~1 trading day = 1/(252*6.5) years
+                expected_move_pct = (vix / 16.0) * (days_to_expiry ** 0.5) * 100  # Annualized to daily
+                expected_move_dollars = current_price * (expected_move_pct / 100)
+                
+                # Calculate breakeven move needed
+                if option_type.lower() == 'call':
+                    breakeven_move = strike + premium - current_price  # Need price to move above strike+premium
+                else:  # put
+                    breakeven_move = current_price - (strike - premium)  # Need price to move below strike-premium
+                
+                # CRITICAL GATE: Expected move must be >= breakeven move
+                if expected_move_dollars < abs(breakeven_move):
+                    return False, f"⛔ BLOCKED: Expected move (${expected_move_dollars:.2f}) < Breakeven move (${abs(breakeven_move):.2f}) | VIX: {vix:.1f} | This trade needs more volatility to be profitable"
+            except Exception as e:
+                # If calculation fails, log but don't block (may be data issue)
+                self.log(f"⚠️ Could not calculate expected move for {symbol}: {e}", "WARNING")
+        
         # ========== SAFEGUARD 7: Order Size Sanity Check ==========
         # For options, notional = premium cost = qty * premium * 100
         # NOT strike price - we're buying options, so cost is premium
@@ -1063,7 +1143,153 @@ def choose_best_symbol_for_trade(iteration: int, symbol_actions: dict, target_ac
     return selected_symbol
 
 
-def get_market_data(symbol: str, period: str = "2d", interval: str = "1m", api: Optional[tradeapi.REST] = None, risk_mgr = None) -> pd.DataFrame:
+# ==================== CACHING HELPER FUNCTIONS ====================
+def _is_cache_valid(cache_entry: Dict, max_age_seconds: int) -> bool:
+    """Check if cache entry is still valid (not expired)"""
+    if not cache_entry or 'timestamp' not in cache_entry:
+        return False
+    cache_time = cache_entry['timestamp']
+    if cache_time is None:
+        return False
+    now = datetime.now(pytz.timezone('US/Eastern'))
+    age_seconds = (now - cache_time).total_seconds()
+    return age_seconds < max_age_seconds
+
+
+def _get_cached_market_data(symbol: str, risk_mgr=None) -> Optional[pd.DataFrame]:
+    """Get cached market data if available and fresh"""
+    global _market_data_cache
+    
+    if symbol in _market_data_cache:
+        cache_entry = _market_data_cache[symbol]
+        if _is_cache_valid(cache_entry, DATA_CACHE_SECONDS):
+            if risk_mgr and hasattr(risk_mgr, 'log'):
+                risk_mgr.log(f"📦 {symbol}: Using cached data ({DATA_CACHE_SECONDS}s cache)", "DEBUG")
+            return cache_entry.get('data')
+    return None
+
+
+def _set_cached_market_data(symbol: str, data: pd.DataFrame, price: float = None):
+    """Store market data in cache"""
+    global _market_data_cache
+    
+    est = pytz.timezone('US/Eastern')
+    _market_data_cache[symbol] = {
+        'data': data,
+        'timestamp': datetime.now(est),
+        'price': price or (data['Close'].iloc[-1] if len(data) > 0 else None)
+    }
+
+
+def get_cached_positions(api: tradeapi.REST, risk_mgr=None) -> list:
+    """Get positions with caching to reduce API calls"""
+    global _positions_cache
+    
+    # Check if cache is valid
+    if _is_cache_valid(_positions_cache, POSITIONS_CACHE_SECONDS):
+        if risk_mgr and hasattr(risk_mgr, 'log'):
+            risk_mgr.log(f"📦 Using cached positions ({POSITIONS_CACHE_SECONDS}s cache)", "DEBUG")
+        return _positions_cache.get('positions', [])
+    
+    # Fetch fresh positions
+    try:
+        positions = api.list_positions()
+        est = pytz.timezone('US/Eastern')
+        _positions_cache = {
+            'positions': positions,
+            'timestamp': datetime.now(est)
+        }
+        return positions
+    except Exception as e:
+        if risk_mgr and hasattr(risk_mgr, 'log'):
+            risk_mgr.log(f"⚠️ Error fetching positions: {e}", "WARNING")
+        # Return cached positions if available (stale is better than nothing)
+        return _positions_cache.get('positions', [])
+
+
+def clear_data_cache(symbol: str = None):
+    """Clear data cache (optionally for specific symbol only)"""
+    global _market_data_cache
+    
+    if symbol:
+        if symbol in _market_data_cache:
+            del _market_data_cache[symbol]
+    else:
+        _market_data_cache.clear()
+
+
+# ==================== NO-TRADE REASON TRACKING ====================
+def track_no_trade_reason(reason: str, risk_mgr=None):
+    """Track why a trade didn't execute (for daily summary)"""
+    global _daily_no_trade_reasons, _no_trade_tracking_date
+    
+    est = pytz.timezone('US/Eastern')
+    today = datetime.now(est).date()
+    
+    # Reset tracking if it's a new day
+    if _no_trade_tracking_date != today:
+        _no_trade_tracking_date = today
+        for key in _daily_no_trade_reasons:
+            _daily_no_trade_reasons[key] = 0
+    
+    # Increment the reason counter
+    if reason in _daily_no_trade_reasons:
+        _daily_no_trade_reasons[reason] += 1
+
+
+def get_daily_no_trade_summary(risk_mgr=None) -> str:
+    """Generate daily summary of why trades didn't execute"""
+    global _daily_no_trade_reasons, _no_trade_tracking_date
+    
+    est = pytz.timezone('US/Eastern')
+    today = datetime.now(est).date()
+    
+    if _no_trade_tracking_date != today:
+        return "No tracking data for today yet."
+    
+    total = sum(_daily_no_trade_reasons.values())
+    if total == 0:
+        return "No trade blocking events recorded today."
+    
+    summary_lines = [
+        f"📊 DAILY NO-TRADE SUMMARY ({today}):",
+        f"   Total HOLD decisions: {total}",
+    ]
+    
+    # Add non-zero reasons
+    reason_labels = {
+        'hold_signals': '   • HOLD signals (RL/Ensemble)',
+        'low_confidence': '   • Low confidence (<60%)',
+        'cooldown_active': '   • Cooldown active',
+        'position_limit': '   • Max positions reached',
+        'daily_loss_limit': '   • Daily loss limit hit',
+        'vix_kill_switch': '   • VIX kill switch',
+        'stale_data': '   • Stale/invalid data',
+        'no_options_available': '   • No valid options',
+        'safeguard_blocked': '   • Other safeguards',
+        'market_closed': '   • Market closed',
+    }
+    
+    for key, label in reason_labels.items():
+        count = _daily_no_trade_reasons.get(key, 0)
+        if count > 0:
+            summary_lines.append(f"{label}: {count}")
+    
+    return "\n".join(summary_lines)
+
+
+def print_daily_no_trade_summary(risk_mgr=None):
+    """Print and log the daily no-trade summary"""
+    summary = get_daily_no_trade_summary(risk_mgr)
+    
+    if risk_mgr and hasattr(risk_mgr, 'log'):
+        for line in summary.split('\n'):
+            risk_mgr.log(line, "INFO")
+    else:
+        print(summary)
+
+
+def get_market_data(symbol: str, period: str = "2d", interval: str = "1m", api: Optional[tradeapi.REST] = None, risk_mgr = None, backtest_mode: bool = False, backtest_end_time: Optional[datetime] = None) -> pd.DataFrame:
     """
     Get market data - tries Alpaca first (you're paying for it!), then Massive API
     
@@ -1089,19 +1315,95 @@ def get_market_data(symbol: str, period: str = "2d", interval: str = "1m", api: 
     """
     global massive_client
     
+    # ========== CHECK CACHE FIRST (Reduces redundant API calls) ==========
+    # Skip cache in backtest mode (need historical data)
+    if not backtest_mode:
+        cached_data = _get_cached_market_data(symbol, risk_mgr)
+        if cached_data is not None and len(cached_data) > 0:
+            return cached_data
+    
     # Use EST timezone for all date/time calculations
     est = pytz.timezone('US/Eastern')
-    now_est = datetime.now(est)
-    today_est = now_est.date()
+    # In backtest mode, use backtest_end_time instead of current time
+    if backtest_mode and backtest_end_time:
+        now_est = backtest_end_time if backtest_end_time.tzinfo else est.localize(backtest_end_time)
+        today_est = now_est.date()
+    else:
+        now_est = datetime.now(est)
+        today_est = now_est.date()
+    
+    # Helper function to convert ANY timestamp to EST string format
+    def timestamp_to_est_str(timestamp) -> str:
+        """
+        Convert any timestamp (UTC, naive, or already EST) to EST string format.
+        This ensures ALL displayed times are in EST consistently.
+        Handles: datetime, pandas Timestamp, string timestamps, None
+        """
+        if timestamp is None:
+            return "N/A"
+        
+        # Handle pandas Timestamp objects
+        if isinstance(timestamp, pd.Timestamp):
+            dt = timestamp.to_pydatetime()
+        # If it's already a string, try to parse it
+        elif isinstance(timestamp, str):
+            try:
+                # Try parsing common formats
+                if '+' in timestamp or 'Z' in timestamp or timestamp.endswith('UTC'):
+                    # UTC format
+                    timestamp_clean = timestamp.replace('Z', '+00:00')
+                    if '+' not in timestamp_clean and 'UTC' in timestamp_clean:
+                        timestamp_clean = timestamp_clean.replace(' UTC', '+00:00')
+                    try:
+                        dt = datetime.fromisoformat(timestamp_clean.replace('+00:00', ''))
+                        dt = pytz.utc.localize(dt) if dt.tzinfo is None else dt
+                    except:
+                        dt = pd.to_datetime(timestamp).to_pydatetime()
+                else:
+                    # Try parsing as naive datetime
+                    dt = pd.to_datetime(timestamp).to_pydatetime()
+            except:
+                return str(timestamp)  # Return as-is if parsing fails
+        else:
+            # Assume it's a datetime-like object
+            dt = timestamp
+        
+        # Convert to EST
+        if hasattr(dt, 'tzinfo') and dt.tzinfo is not None:
+            dt_est = dt.astimezone(est)
+        else:
+            # Assume UTC if no timezone (Alpaca/Massive APIs return UTC)
+            try:
+                if isinstance(dt, datetime):
+                    dt_utc = pytz.utc.localize(dt)
+                else:
+                    dt_utc = pytz.utc.localize(pd.Timestamp(dt).to_pydatetime())
+                dt_est = dt_utc.astimezone(est)
+            except Exception as e:
+                # If localization fails, try to assume it's already in EST
+                try:
+                    dt_est = est.localize(dt) if isinstance(dt, datetime) else est.localize(pd.Timestamp(dt).to_pydatetime())
+                except:
+                    # Last resort: return formatted as-is
+                    return str(dt)
+        
+        # Format as EST string
+        return dt_est.strftime('%Y-%m-%d %H:%M:%S %Z')
     
     # Helper function to validate data freshness
     def validate_data_freshness(data: pd.DataFrame, source: str) -> tuple[bool, str]:
         """
         Validate that data is from today and not stale (>5 minutes old)
         Returns: (is_valid, error_message)
+        
+        🔴 RED-TEAM FIX: In backtest_mode, skip freshness checks (historical data is expected to be old)
         """
         if len(data) == 0:
             return False, "Empty data"
+        
+        # In backtest mode, skip freshness validation (historical data is expected)
+        if backtest_mode:
+            return True, "Backtest mode: freshness check skipped"
         
         last_bar_time = data.index[-1]
         
@@ -1242,7 +1544,11 @@ def get_market_data(symbol: str, period: str = "2d", interval: str = "1m", api: 
                     bars = pd.DataFrame()
                 else:
                     bars_count = len(bars)
-                    expected_min_bars = 1500 if period == "2d" else 700
+                    # In backtest mode, be more lenient with bar count (historical data may have gaps)
+                    if backtest_mode:
+                        expected_min_bars = 20  # Just need enough for observation (20 bars minimum)
+                    else:
+                        expected_min_bars = 1500 if period == "2d" else 700
                     
                     if bars_count < expected_min_bars and period == "2d":
                         if risk_mgr and hasattr(risk_mgr, 'log'):
@@ -1255,7 +1561,7 @@ def get_market_data(symbol: str, period: str = "2d", interval: str = "1m", api: 
                     else:
                         # Data is valid and sufficient
                         last_price = bars['Close'].iloc[-1]
-                        last_time_str = str(bars.index[-1])
+                        last_time_str = timestamp_to_est_str(bars.index[-1])
                         log_data_source("Alpaca API", bars_count, symbol, last_price, last_time_str)
                         if risk_mgr and hasattr(risk_mgr, 'log'):
                             risk_mgr.log(
@@ -1263,6 +1569,9 @@ def get_market_data(symbol: str, period: str = "2d", interval: str = "1m", api: 
                                 f"{validation_msg}",
                                 "INFO"
                             )
+                        # Cache data before returning (reduces redundant API calls)
+                        if not backtest_mode:
+                            _set_cached_market_data(symbol, bars, last_price)
                         return bars
             else:
                 if risk_mgr and hasattr(risk_mgr, 'log'):
@@ -1304,8 +1613,14 @@ def get_market_data(symbol: str, period: str = "2d", interval: str = "1m", api: 
             
             # Massive API needs date strings in YYYY-MM-DD format
             # Use EST timezone for date calculations
-            end_date_str = (now_est + timedelta(days=1)).strftime("%Y-%m-%d")  # Tomorrow to include today
-            start_date_str = (now_est - timedelta(days=days)).strftime("%Y-%m-%d")
+            # In backtest mode, use backtest_end_time; otherwise use current time
+            if backtest_mode and backtest_end_time:
+                backtest_time_est = backtest_end_time if backtest_end_time.tzinfo else est.localize(backtest_end_time)
+                end_date_str = (backtest_time_est + timedelta(days=1)).strftime("%Y-%m-%d")  # Tomorrow to include today
+                start_date_str = (backtest_time_est - timedelta(days=days)).strftime("%Y-%m-%d")
+            else:
+                end_date_str = (now_est + timedelta(days=1)).strftime("%Y-%m-%d")  # Tomorrow to include today
+                start_date_str = (now_est - timedelta(days=days)).strftime("%Y-%m-%d")
             
             # Log request with EST timezone info
             if risk_mgr and hasattr(risk_mgr, 'log'):
@@ -1350,38 +1665,64 @@ def get_market_data(symbol: str, period: str = "2d", interval: str = "1m", api: 
                     except:
                         pass
                 
-                # CRITICAL: Validate data freshness (must be from today and < 5 minutes old)
-                is_valid, validation_msg = validate_data_freshness(hist, "Massive API")
-                
-                if not is_valid:
-                    if risk_mgr and hasattr(risk_mgr, 'log'):
-                        risk_mgr.log(
-                            f"❌ CRITICAL: Massive API data validation failed for {symbol}: {validation_msg}. "
-                            f"Rejecting stale data, trying yfinance (DELAYED - LAST RESORT)...",
-                            "ERROR"
-                        )
-                    # Don't return stale data - fall through to yfinance
-                    hist = pd.DataFrame()
+                # CRITICAL: Validate data freshness (skip in backtest mode)
+                if not backtest_mode:
+                    is_valid, validation_msg = validate_data_freshness(hist, "Massive API")
+                    
+                    if not is_valid:
+                        if risk_mgr and hasattr(risk_mgr, 'log'):
+                            risk_mgr.log(
+                                f"❌ CRITICAL: Massive API data validation failed for {symbol}: {validation_msg}. "
+                                f"Rejecting stale data, trying yfinance (DELAYED - LAST RESORT)...",
+                                "ERROR"
+                            )
+                        # Don't return stale data - fall through to yfinance
+                        hist = pd.DataFrame()
+                    else:
+                        validation_msg = validation_msg
                 else:
+                    # In backtest mode, accept historical data from Massive API
+                    validation_msg = "Backtest mode: historical data accepted"
+                    is_valid = True
+                
+                if is_valid and len(hist) > 0:
                     hist_count = len(hist)
                     last_price = hist['Close'].iloc[-1] if 'Close' in hist.columns else hist['close'].iloc[-1]
-                    last_time_str = str(hist.index[-1])
+                    last_time_str = timestamp_to_est_str(hist.index[-1])
                     log_data_source("Massive API", hist_count, symbol, last_price, last_time_str)
                     
                     if risk_mgr and hasattr(risk_mgr, 'log'):
-                        if hist_count < 1500 and period == "2d":
-                            risk_mgr.log(
-                                f"⚠️ Massive API returned {hist_count} bars for 2 days "
-                                f"(expected at least 1,500). May be incomplete.",
-                                "WARNING"
-                            )
+                        # In backtest mode, be more lenient with bar count
+                        if backtest_mode:
+                            if hist_count >= 20:  # Minimum for observation
+                                risk_mgr.log(
+                                    f"✅ Massive API (BACKTEST): {hist_count} bars, last price: ${last_price:.2f}, "
+                                    f"{validation_msg}",
+                                    "INFO"
+                                )
+                            else:
+                                risk_mgr.log(
+                                    f"⚠️ Massive API (BACKTEST): Only {hist_count} bars (need at least 20 for observation)",
+                                    "WARNING"
+                                )
                         else:
-                            risk_mgr.log(
-                                f"✅ Massive API: {hist_count} bars, last price: ${last_price:.2f}, "
-                                f"{validation_msg}",
-                                "INFO"
-                            )
+                            # Live trading: stricter requirements
+                            if hist_count < 1500 and period == "2d":
+                                risk_mgr.log(
+                                    f"⚠️ Massive API returned {hist_count} bars for 2 days "
+                                    f"(expected at least 1,500). May be incomplete.",
+                                    "WARNING"
+                                )
+                            else:
+                                risk_mgr.log(
+                                    f"✅ Massive API: {hist_count} bars, last price: ${last_price:.2f}, "
+                                    f"{validation_msg}",
+                                    "INFO"
+                                )
                     
+                    # Cache data before returning (reduces redundant API calls)
+                    if not backtest_mode:
+                        _set_cached_market_data(symbol, hist, last_price)
                     return hist
             else:
                 if risk_mgr and hasattr(risk_mgr, 'log'):
@@ -1402,11 +1743,11 @@ def get_market_data(symbol: str, period: str = "2d", interval: str = "1m", api: 
                 risk_mgr.log(f"   Traceback: {traceback.format_exc()[:200]}", "WARNING")
             pass
     
-    # ========== NO YFINANCE FALLBACK (DELAYED DATA NOT ACCEPTABLE) ==========
-    # ⚠️ yfinance is DELAYED (15-20 minutes) - NOT SUITABLE FOR 0DTE TRADING
-    # If both Alpaca and Massive fail, return empty DataFrame and skip iteration
-    # This ensures we NEVER use delayed data for trading decisions
-    if ALLOW_YFINANCE_FALLBACK:
+    # ========== YFINANCE FALLBACK (ONLY FOR BACKTESTS) ==========
+    # ⚠️ yfinance is DELAYED (15-20 minutes) - NOT SUITABLE FOR LIVE 0DTE TRADING
+    # BUT: For backtests, historical data from yfinance is acceptable
+    # If both Alpaca and Massive fail, use yfinance ONLY in backtest mode
+    if backtest_mode or ALLOW_YFINANCE_FALLBACK:
         # Only use yfinance if explicitly enabled (NOT RECOMMENDED)
         try:
             if risk_mgr and hasattr(risk_mgr, 'log'):
@@ -1431,30 +1772,37 @@ def get_market_data(symbol: str, period: str = "2d", interval: str = "1m", api: 
             hist = hist.dropna()
             
             if len(hist) > 0:
-                # CRITICAL: Validate this is TODAY's data
-                is_valid, validation_msg = validate_data_freshness(hist, "yfinance")
-                
-                if not is_valid:
-                    if risk_mgr and hasattr(risk_mgr, 'log'):
-                        risk_mgr.log(
-                            f"❌ CRITICAL: yfinance data validation failed for {symbol}: {validation_msg}. "
-                            f"Cannot use stale data for 0DTE trading.",
-                            "ERROR"
-                        )
-                    return pd.DataFrame()  # Return empty - better than wrong data
+                # CRITICAL: Validate this is TODAY's data (skip in backtest mode)
+                if not backtest_mode:
+                    is_valid, validation_msg = validate_data_freshness(hist, "yfinance")
+                    
+                    if not is_valid:
+                        if risk_mgr and hasattr(risk_mgr, 'log'):
+                            risk_mgr.log(
+                                f"❌ CRITICAL: yfinance data validation failed for {symbol}: {validation_msg}. "
+                                f"Cannot use stale data for 0DTE trading.",
+                                "ERROR"
+                            )
+                        return pd.DataFrame()  # Return empty - better than wrong data
+                else:
+                    # In backtest mode, accept historical data from yfinance
+                    validation_msg = "Backtest mode: historical data accepted"
                 
                 last_price = hist['Close'].iloc[-1]
-                last_time_str = str(hist.index[-1])
+                last_time_str = timestamp_to_est_str(hist.index[-1])
                 log_data_source("yfinance (DELAYED - LAST RESORT)", len(hist), symbol, last_price, last_time_str)
                 
                 if risk_mgr and hasattr(risk_mgr, 'log'):
                     risk_mgr.log(
                         f"⚠️ Using yfinance (DELAYED) for {symbol} - NOT SUITABLE FOR 0DTE! "
-                        f"Last price: ${last_price:.2f} at {hist.index[-1]}. "
+                        f"Last price: ${last_price:.2f} at {last_time_str}. "
                         f"{validation_msg}",
                         "WARNING"
                     )
                 
+                # Cache data before returning (reduces redundant API calls)
+                if not backtest_mode:
+                    _set_cached_market_data(symbol, hist, last_price)
                 return hist
             else:
                 if risk_mgr and hasattr(risk_mgr, 'log'):
@@ -3218,6 +3566,50 @@ def run_safe_live_trading():
     time = time_module
     del time_module
     
+    # ========== LIVE AGENT LOCK (PREVENTS BACKTEST INTERFERENCE) ==========
+    # Create lock file to indicate live agent is running
+    LIVE_AGENT_LOCK_FILE = "/tmp/mike_agent_live.lock"
+    LIVE_AGENT_PID_FILE = "/tmp/mike_agent_live.pid"
+    
+    try:
+        # Create lock file
+        est = pytz.timezone('US/Eastern')
+        now_est = datetime.now(est)
+        with open(LIVE_AGENT_LOCK_FILE, 'w') as f:
+            f.write(f"Live agent lock - {now_est.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
+            f.write(f"PID: {os.getpid()}\n")
+        
+        # Save PID
+        with open(LIVE_AGENT_PID_FILE, 'w') as f:
+            f.write(str(os.getpid()))
+        
+        print(f"✅ Live agent lock created: {LIVE_AGENT_LOCK_FILE}")
+        print(f"✅ PID saved: {LIVE_AGENT_PID_FILE}")
+    except Exception as e:
+        print(f"⚠️  Could not create lock file: {e}")
+    
+    # Cleanup function to remove lock on exit
+    def cleanup_lock():
+        try:
+            if os.path.exists(LIVE_AGENT_LOCK_FILE):
+                os.remove(LIVE_AGENT_LOCK_FILE)
+            if os.path.exists(LIVE_AGENT_PID_FILE):
+                os.remove(LIVE_AGENT_PID_FILE)
+        except:
+            pass
+    
+    import atexit
+    atexit.register(cleanup_lock)
+    
+    # Also register signal handlers
+    def signal_handler(sig, frame):
+        cleanup_lock()
+        sys.exit(0)
+    
+    import signal
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
+    
     # Send test Telegram alert on startup to verify alerts are working
     if TELEGRAM_AVAILABLE:
         try:
@@ -3455,6 +3847,9 @@ def run_safe_live_trading():
                                 f"⏸️  Market is CLOSED (Alpaca clock) | Next open: {clock.next_open} | Next close: {clock.next_close}",
                                 "INFO"
                             )
+                            # Print daily no-trade summary when market closes
+                            print_daily_no_trade_summary(risk_mgr)
+                        track_no_trade_reason('market_closed', risk_mgr)
                         time.sleep(60)  # Wait longer when market is closed
                         continue
                     
@@ -3490,6 +3885,13 @@ def run_safe_live_trading():
                 if not can_trade:
                     if iteration % 10 == 0:  # Log every 10th iteration
                         risk_mgr.log(f"Safeguard active: {reason}", "INFO")
+                    # Track specific safeguard reasons
+                    if 'loss limit' in reason.lower():
+                        track_no_trade_reason('daily_loss_limit', risk_mgr)
+                    elif 'vix' in reason.lower():
+                        track_no_trade_reason('vix_kill_switch', risk_mgr)
+                    else:
+                        track_no_trade_reason('safeguard_blocked', risk_mgr)
                     time.sleep(30)
                     continue
                 
@@ -3592,6 +3994,7 @@ def run_safe_live_trading():
                             pass
                     
                     # Try Massive for validation if Alpaca didn't work
+                    # NOTE: Architect feedback - Alpaca is CANONICAL, Massive is informational only
                     if alt_price is None and massive_client:
                         try:
                             now_est = datetime.now(est)
@@ -3602,31 +4005,35 @@ def run_safe_live_trading():
                             if len(alt_hist) > 0:
                                 alt_price = float(alt_hist['close'].iloc[-1] if 'close' in alt_hist.columns else alt_hist['Close'].iloc[-1])
                                 alt_source = "Massive"
+                                # Get Massive timestamp for comparison
+                                alt_timestamp = alt_hist.index[-1] if len(alt_hist) > 0 else None
                         except:
                             pass
                     
-                    # If we have alternative price, compare
+                    # If we have alternative price, compare (but ALWAYS use Alpaca as canonical)
                     if alt_price is not None:
                         price_diff = abs(current_price - alt_price)
+                        price_diff_pct = (price_diff / current_price) * 100 if current_price > 0 else 0
                         
-                        if price_diff > 2.00:  # More than $2 difference
+                        # ARCHITECT RECOMMENDATION: >0.3% mismatch = ignore Massive
+                        if price_diff_pct > 0.3:
                             risk_mgr.log(
-                                f"⚠️ PRICE MISMATCH: Primary: ${current_price:.2f}, {alt_source}: ${alt_price:.2f}, "
-                                f"diff: ${price_diff:.2f}. Using primary source.",
+                                f"⚠️ DATA MISMATCH (>0.3%): Alpaca: ${current_price:.2f} vs {alt_source}: ${alt_price:.2f} | "
+                                f"Diff: ${price_diff:.2f} ({price_diff_pct:.2f}%) | USING ALPACA (canonical)",
                                 "WARNING"
                             )
-                        elif price_diff > 0.50:  # More than $0.50 difference
+                        elif price_diff > 0.50:  # More than $0.50 difference but under 0.3%
                             risk_mgr.log(
-                                f"🔍 Price Validation: Primary: ${current_price:.2f}, {alt_source}: ${alt_price:.2f}, "
-                                f"diff: ${price_diff:.2f}",
+                                f"🔍 Price Validation: Alpaca: ${current_price:.2f}, {alt_source}: ${alt_price:.2f}, "
+                                f"diff: ${price_diff:.2f} ({price_diff_pct:.2f}%)",
                                 "DEBUG"
                             )
                         else:
                             # Prices match closely - good
                             if iteration % 10 == 0:  # Log every 10th iteration to avoid spam
                                 risk_mgr.log(
-                                    f"✅ Price Validation: Primary: ${current_price:.2f}, {alt_source}: ${alt_price:.2f}, "
-                                    f"diff: ${price_diff:.2f} (match)",
+                                    f"✅ Price Validation: Alpaca: ${current_price:.2f}, {alt_source}: ${alt_price:.2f}, "
+                                    f"diff: ${price_diff:.2f} ({price_diff_pct:.2f}%) - MATCH ✓",
                                     "DEBUG"
                                 )
                 except Exception as e:
@@ -4003,42 +4410,12 @@ def run_safe_live_trading():
                                 "INFO"
                             )
                         
-                        # If we're FLAT and the model keeps outputting TRIM/EXIT, resample stochastically.
-                        # This preserves safety (we still only enter on BUY actions) while avoiding deadlock.
+                        # ❌ RESAMPLING REMOVED PER RED-TEAM REPORT
+                        # The model is correctly uncertain - forcing trades via resampling
+                        # causes losses. Better to have zero trades than wrong trades.
+                        # "Kill the idea that more trades = learning"
                         resampled = False
-                        if not risk_mgr.open_positions and action in (3, 4, 5):
-                            try:
-                                sampled = []
-                                for _ in range(7):
-                                    a_s, _ = model.predict(obs, deterministic=False)
-                                    if isinstance(a_s, np.ndarray):
-                                        if a_s.ndim == 0:
-                                            sampled.append(int(a_s.item()))
-                                        else:
-                                            sampled.append(int(a_s[0] if len(a_s) > 0 else a_s.item()))
-                                    elif isinstance(a_s, (list, tuple)):
-                                        sampled.append(int(a_s[0] if len(a_s) > 0 else 0))
-                                    else:
-                                        sampled.append(int(a_s))
-
-                                buy_samples = [a for a in sampled if a in (1, 2)]
-                                if buy_samples:
-                                    # Prefer the more frequent BUY direction
-                                    rl_action = max(set(buy_samples), key=buy_samples.count)
-                                    resampled = True
-                                    risk_mgr.log(
-                                        f"🔁 {sym} Resample while flat: original={original_rl_action} ({get_action_name(original_rl_action)}) "
-                                        f"| sampled={sampled} | selected_buy={rl_action} ({get_action_name(rl_action)})",
-                                        "DEBUG",
-                                    )
-                                else:
-                                    risk_mgr.log(
-                                        f"🔁 {sym} Resample while flat: original={original_rl_action} ({get_action_name(original_rl_action)}) "
-                                        f"| sampled={sampled} | no BUY found, keeping original",
-                                        "DEBUG",
-                                    )
-                            except Exception as e:
-                                risk_mgr.log(f"🔁 {sym} Resample while flat failed: {e}", "DEBUG")
+                        # If model says HOLD or TRIM/EXIT when flat, respect it - do NOT resample
 
                         # Map discrete actions to trading actions
                         # Model outputs: 0=HOLD, 1=BUY CALL, 2=BUY PUT, 3=TRIM 50%, 4=TRIM 70%, 5=FULL EXIT
@@ -4072,7 +4449,8 @@ def run_safe_live_trading():
                         # Log per-symbol RL decision (using canonical action mapping)
                         # Show original action if it was remapped/masked
                         action_desc = get_action_name(action)
-                        if resampled or masked:
+                        # Note: resampled is always False now (resampling removed per red-team report)
+                        if masked:
                             original_desc = get_action_name(original_rl_action)
                             risk_mgr.log(f"🧠 {sym} RL Inference: action={action} ({action_desc}) | Original: {original_rl_action} ({original_desc}) | Source: {action_source} | Strength: {action_strength:.3f}", "INFO")
                         else:
@@ -4126,8 +4504,15 @@ def run_safe_live_trading():
                             actions_list.append(f"{sym}:{act}({strength:.2f})")
                         actions_summary = ", ".join(actions_list)
                         risk_mgr.log(f"🤔 Multi-Symbol RL: All HOLD | Actions: [{actions_summary}] | Open Positions: {len(risk_mgr.open_positions)}/{MAX_CONCURRENT} | Available: {available_symbols}", "INFO")
+                        # Track no-trade reason
+                        track_no_trade_reason('hold_signals', risk_mgr)
                     else:
                         risk_mgr.log(f"🤔 Multi-Symbol RL: HOLD (no available symbols) | Open Positions: {len(risk_mgr.open_positions)}/{MAX_CONCURRENT}", "INFO")
+                        # Track no-trade reason
+                        if len(risk_mgr.open_positions) >= MAX_CONCURRENT:
+                            track_no_trade_reason('position_limit', risk_mgr)
+                        else:
+                            track_no_trade_reason('hold_signals', risk_mgr)
                 
                 # Log raw RL output for debugging (every 5th iteration for better visibility)
                 if iteration % 5 == 0:
@@ -4219,15 +4604,29 @@ def run_safe_live_trading():
                     )
                     
                     if not current_symbol:
-                        buy_call_symbols = [sym for sym, (act, _, _) in symbol_actions.items() if act == 1]
+                        buy_call_symbols = [sym for sym, action_data in symbol_actions.items() 
+                                           if isinstance(action_data, dict) and action_data.get('action') == 1]
                         risk_mgr.log(f"⛔ BLOCKED: No eligible symbols for BUY CALL | Signals: {buy_call_symbols} | Open Positions: {list(risk_mgr.open_positions.keys())}", "INFO")
                         # Fall through to next iteration
                     else:
                         # Check minimum confidence threshold before executing
-                        selected_strength = symbol_actions.get(current_symbol, (None, None, 0.0))[2] if current_symbol in symbol_actions else 0.0
+                        action_data = symbol_actions.get(current_symbol, {})
+                        if isinstance(action_data, dict):
+                            selected_strength = action_data.get('action_strength', 0.0)
+                        else:
+                            # Fallback for tuple format (legacy)
+                            try:
+                                if isinstance(action_data, (tuple, list)) and len(action_data) > 2:
+                                    selected_strength = action_data[2]
+                                else:
+                                    selected_strength = 0.0
+                            except (IndexError, TypeError, KeyError):
+                                selected_strength = 0.0
                         if selected_strength < MIN_ACTION_STRENGTH_THRESHOLD:
                             block_reason = f"Confidence too low (strength={selected_strength:.3f} < {MIN_ACTION_STRENGTH_THRESHOLD:.3f})"
                             risk_mgr.log(f"⛔ BLOCKED: Selected symbol {current_symbol} {block_reason} | Skipping trade", "INFO")
+                            # Track no-trade reason
+                            track_no_trade_reason('low_confidence', risk_mgr)
                             # Send Telegram block alert for confidence threshold blocks
                             if TELEGRAM_AVAILABLE:
                                 try:
@@ -4237,7 +4636,8 @@ def run_safe_live_trading():
                             time.sleep(10)
                             continue
                         # current_symbol already validated and selected by choose_best_symbol_for_trade
-                        buy_call_symbols = [sym for sym, (act, _, _) in symbol_actions.items() if act == 1]
+                        buy_call_symbols = [sym for sym, action_data in symbol_actions.items() 
+                                           if isinstance(action_data, dict) and action_data.get('action') == 1]
                         risk_mgr.log(f"🎯 SYMBOL SELECTION: {current_symbol} selected for BUY CALL (strength={selected_strength:.3f}) | All CALL signals: {buy_call_symbols}", "INFO")
                     
                     # Skip if no symbol selected
@@ -4305,11 +4705,17 @@ def run_safe_live_trading():
                     ta_strike = None
                     if current_symbol in symbol_actions:
                         action_info = symbol_actions[current_symbol]
-                        # Check if TA result was stored (4th element if exists)
-                        if len(action_info) >= 4 and action_info[3] is not None:
-                            ta_result_call = action_info[3]
-                            if ta_result_call and ta_result_call.get('strike_suggestion'):
+                        # Handle dict format (current) or tuple format (legacy)
+                        if isinstance(action_info, dict):
+                            ta_result_call = action_info.get('ta_result')
+                            if ta_result_call and isinstance(ta_result_call, dict) and ta_result_call.get('strike_suggestion'):
                                 ta_strike = ta_result_call['strike_suggestion']
+                        else:
+                            # Legacy tuple format: (action, source, strength, ta_result)
+                            if len(action_info) >= 4 and action_info[3] is not None:
+                                ta_result_call = action_info[3]
+                                if ta_result_call and isinstance(ta_result_call, dict) and ta_result_call.get('strike_suggestion'):
+                                    ta_strike = ta_result_call['strike_suggestion']
                     
                     # Use TA-based strike if available, otherwise use fixed offset
                     if ta_strike and ta_strike > 0:

@@ -71,3 +71,4 @@ python3 sync_alpaca_trades.py
 
 **Note:** The script will now properly detect if credentials are placeholders and provide helpful instructions.
 
+

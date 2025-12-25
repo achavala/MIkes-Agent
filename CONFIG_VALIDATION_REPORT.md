@@ -83,3 +83,4 @@ Run connection test to verify credentials work with Alpaca API.
 
 **Status:** ✅ CONFIG FIXED - Ready for connection test
 
+

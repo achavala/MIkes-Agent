@@ -190,3 +190,4 @@ resistance_trend = np.max(highs[-10:-5])  # ✅ DYNAMIC CALCULATION
 
 
 
+

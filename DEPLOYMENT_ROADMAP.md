@@ -307,3 +307,4 @@ You are now **VERY CLOSE** to a real SPY/QQQ/SPX scalper agent.
 
 
 
+

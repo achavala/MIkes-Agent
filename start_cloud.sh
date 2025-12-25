@@ -43,6 +43,14 @@ if [ -z "$ALPACA_KEY" ] || [ -z "$ALPACA_SECRET" ]; then
     echo "   Set secrets with: fly secrets set ALPACA_KEY=... ALPACA_SECRET=..."
 fi
 
+# Check for MASSIVE_API_KEY (optional but recommended)
+if [ -z "$MASSIVE_API_KEY" ] && [ -z "$POLYGON_API_KEY" ]; then
+    echo "ℹ️  MASSIVE_API_KEY not set. Will use Alpaca API only."
+    echo "   To enable Massive API: fly secrets set MASSIVE_API_KEY=..."
+else
+    echo "✅ MASSIVE_API_KEY is set (will be used as Priority 2 data source)"
+fi
+
 # Determine mode from environment variable
 MODE=${MODE:-paper}
 echo "🧪 Starting Agent in ${MODE^^} mode..."
@@ -218,6 +226,9 @@ echo "✅ Dashboard started (PID: $DASHBOARD_PID)"
 
 # Start the trading agent in the background
 echo "🤖 Starting trading agent..."
+echo "   ⏰ Agent will automatically wait for market to open (checks Alpaca clock)"
+echo "   📊 Market hours: 9:30 AM - 4:00 PM EST (Monday-Friday)"
+echo "   🔄 Agent will sleep when market is closed and resume when market opens"
 # Use unbuffered Python output and redirect to both file and stdout
 python -u mike_agent_live_safe.py 2>&1 | tee /tmp/agent.log &
 AGENT_PID=$!

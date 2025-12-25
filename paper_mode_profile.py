@@ -95,3 +95,4 @@ def apply_paper_mode_overrides(config: Dict[str, Any], profile: Dict[str, Any] =
 
 
 
+

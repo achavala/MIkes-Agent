@@ -400,3 +400,4 @@ Timestep | Feature 0-4 (OHLCV)        | Feature 5-6 (VIX) | Feature 7-17 (Techni
 
 **This is the complete state representation!**
 
+

@@ -171,3 +171,4 @@ TRADING_SYMBOLS = ['SPY', 'QQQ']  # SPX removed - not available in Alpaca paper 
 
 
 
+

@@ -207,3 +207,4 @@ risk_mgr.log(f"Generated option: {option_symbol} | Expiration: {expiration_date}
 
 **Status:** 🔴 CRITICAL - Fix applied, validation needed
 
+

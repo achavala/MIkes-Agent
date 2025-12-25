@@ -448,3 +448,4 @@ grep "🔍\|🧠\|Symbol selected\|TRADE EXECUTED" logs/agent_*.log | tail -100
 
 
 
+

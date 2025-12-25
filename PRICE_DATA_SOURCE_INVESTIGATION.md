@@ -137,3 +137,4 @@ last_bar_time = hist.index[-1]
 
 **Status:** 🔴 CRITICAL - Price data validation needed
 
+

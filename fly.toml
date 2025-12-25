@@ -15,6 +15,11 @@ primary_region = 'dfw'
   auto_start_machines = true
   min_machines_running = 1
   processes = ['app']
+  
+# Ensure machine stays running 24/7 to catch market open
+# Agent automatically checks Alpaca clock and waits for market to open
+[deploy]
+  strategy = "immediate"
 
 # VM configuration
 [[vm]]

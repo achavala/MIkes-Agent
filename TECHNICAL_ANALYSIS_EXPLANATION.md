@@ -269,3 +269,4 @@ def detect_trendline_break(data, timeframe='15M', require_confirmation=True):
 
 
 
+

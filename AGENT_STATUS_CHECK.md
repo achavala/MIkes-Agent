@@ -58,3 +58,4 @@ fly logs --app mike-agent-project | grep -E "EXECUTED|CLOSED|RL Decision|trading
 
 
 
+

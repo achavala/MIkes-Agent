@@ -64,3 +64,4 @@ HOLD rate on strong setups: 49.4%
 
 
 
+

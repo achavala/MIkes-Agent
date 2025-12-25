@@ -189,3 +189,4 @@ Should now show:
 
 **Next Action:** Run `python3 sync_alpaca_trades.py` to sync Dec 18 trades
 
+

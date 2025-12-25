@@ -34,3 +34,4 @@ All trades are saved to a persistent SQLite database for tracking and analysis.
 
 See `query_recent_trades.py` to query recent trades from the database.
 
+

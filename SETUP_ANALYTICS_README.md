@@ -136,3 +136,4 @@ The analytics tool automatically:
 - Keeps last 50 events in each category
 - Watch mode refreshes every 5 seconds
 
+

@@ -343,3 +343,4 @@ fly logs --app mike-agent-project | grep -i "model"
 
 **The key insight:** Models are **copied into the Docker image during build**, not accessed from your local computer at runtime. The `.dockerignore` file controls which files get copied.
 
+

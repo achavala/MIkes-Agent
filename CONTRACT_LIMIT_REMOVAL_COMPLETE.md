@@ -181,3 +181,4 @@ The system is now ready to use **regime-adjusted position sizing** without the a
 
 
 
+
