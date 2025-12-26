@@ -4673,29 +4673,37 @@ def run_safe_live_trading():
                             )
                             continue  # Reject order
                     
-                    # Cross-validate with current_price (SPY) - should be close for similar ETFs
-                    if current_symbol in ['SPY', 'QQQ', 'IWM']:
+                    # Cross-validate price sanity check (ONLY for same symbol, NOT cross-symbol comparison)
+                    # NOTE: Do NOT compare QQQ price to SPY price - they are different instruments!
+                    # QQQ ~$530, SPY ~$600, IWM ~$220 - absolute dollar comparison is WRONG
+                    if current_symbol == 'SPY':
+                        # Only validate SPY price against SPY reference (current_price is SPY)
                         price_diff = abs(symbol_price - current_price)
                         price_diff_pct = price_diff / current_price if current_price > 0 else 0
                         
-                        if price_diff > 5.0:  # More than $5 difference
+                        if price_diff > 5.0:  # More than $5 difference for SAME symbol
                             risk_mgr.log(
-                                f"❌ CRITICAL: {current_symbol} price ${symbol_price:.2f} differs from SPY ${current_price:.2f} "
+                                f"❌ CRITICAL: SPY price ${symbol_price:.2f} differs from SPY reference ${current_price:.2f} "
                                 f"by ${price_diff:.2f} ({price_diff_pct:.1%}). Data may be stale. REJECTING ORDER.",
                                 "ERROR"
                             )
                             continue  # Reject order
-                        elif price_diff > 2.0:  # More than $2 difference
+                        elif price_diff > 2.0:
                             risk_mgr.log(
-                                f"⚠️ WARNING: {current_symbol} price ${symbol_price:.2f} differs from SPY ${current_price:.2f} "
+                                f"⚠️ WARNING: SPY price ${symbol_price:.2f} differs from SPY reference ${current_price:.2f} "
                                 f"by ${price_diff:.2f}. Proceeding with caution.",
                                 "WARNING"
                             )
+                    else:
+                        # For QQQ/IWM - just log the prices, don't compare to SPY
+                        risk_mgr.log(
+                            f"📊 {current_symbol} price: ${symbol_price:.2f} (SPY reference: ${current_price:.2f})",
+                            "INFO"
+                        )
                     
                     # Log price source and validation
                     risk_mgr.log(
                         f"📊 Price Validation: {current_symbol} = ${symbol_price:.2f} | "
-                        f"SPY = ${current_price:.2f} | Diff: ${abs(symbol_price - current_price):.2f} | "
                         f"Price is within expected range ✅",
                         "INFO"
                     )
