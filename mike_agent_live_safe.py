@@ -1548,7 +1548,10 @@ def get_market_data(symbol: str, period: str = "2d", interval: str = "1m", api: 
                     if backtest_mode:
                         expected_min_bars = 20  # Just need enough for observation (20 bars minimum)
                     else:
-                        expected_min_bars = 1500 if period == "2d" else 700
+                        # IMPORTANT: During holiday weeks (Thanksgiving, Christmas, etc.), expect FEWER bars
+                        # Normal 2 days = ~1500 bars (2 x 780). Holiday weeks may have half-days or closures.
+                        # Only require 100 bars minimum - enough for 20-bar lookback + some buffer
+                        expected_min_bars = 100 if period == "2d" else 50
                     
                     if bars_count < expected_min_bars and period == "2d":
                         if risk_mgr and hasattr(risk_mgr, 'log'):
