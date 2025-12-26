@@ -33,6 +33,43 @@ class TechnicalAnalysisEngine:
         self.lookback_bars = lookback_bars
         self.pattern_cache = {}  # Cache detected patterns
     
+    def _normalize_columns(self, data: pd.DataFrame) -> pd.DataFrame:
+        """
+        CRITICAL FIX: Normalize column names to lowercase for consistent access.
+        
+        This handles data from different sources:
+        - Alpaca returns: Open, High, Low, Close, Volume (capitalized after our mapping)
+        - Massive API: may return lowercase or capitalized
+        - yfinance: typically returns capitalized
+        
+        We normalize ALL columns to lowercase for consistent access in TA calculations.
+        """
+        if data is None or len(data) == 0:
+            return data
+        
+        # Create a copy to avoid modifying original
+        df = data.copy()
+        
+        # Standard column mapping (handle all variations)
+        column_map = {}
+        for col in df.columns:
+            col_lower = col.lower()
+            if col_lower in ['open', 'o']:
+                column_map[col] = 'open'
+            elif col_lower in ['high', 'h']:
+                column_map[col] = 'high'
+            elif col_lower in ['low', 'l']:
+                column_map[col] = 'low'
+            elif col_lower in ['close', 'c', 'adj close', 'adjclose']:
+                column_map[col] = 'close'
+            elif col_lower in ['volume', 'v', 'vol']:
+                column_map[col] = 'volume'
+        
+        if column_map:
+            df = df.rename(columns=column_map)
+        
+        return df
+    
     def detect_false_breakout(
         self, 
         data: pd.DataFrame, 
@@ -64,6 +101,9 @@ class TechnicalAnalysisEngine:
         """
         if len(data) < 20:
             return {'detected': False, 'reason': 'Insufficient data'}
+        
+        # CRITICAL: Normalize columns to lowercase for consistent access
+        data = self._normalize_columns(data)
         
         # Get recent price action
         recent = data.tail(20)
@@ -142,6 +182,9 @@ class TechnicalAnalysisEngine:
         """
         if len(data) < 5:
             return {'detected': False, 'reason': 'Insufficient data'}
+        
+        # CRITICAL: Normalize columns to lowercase for consistent access
+        data = self._normalize_columns(data)
         
         # Get recent price action
         recent = data.tail(10)
@@ -224,6 +267,9 @@ class TechnicalAnalysisEngine:
         """
         if len(data) < 30:
             return {'detected': False, 'reason': 'Insufficient data'}
+        
+        # CRITICAL: Normalize columns to lowercase for consistent access
+        data = self._normalize_columns(data)
         
         # Get recent price action
         recent = data.tail(30)
@@ -372,6 +418,9 @@ class TechnicalAnalysisEngine:
         if len(data) < 20:
             return {'detected': False, 'reason': 'Insufficient data'}
         
+        # CRITICAL: Normalize columns to lowercase for consistent access
+        data = self._normalize_columns(data)
+        
         recent = data.tail(30)
         highs = recent['high'].values
         lows = recent['low'].values
@@ -449,6 +498,9 @@ class TechnicalAnalysisEngine:
         """
         if len(data) < 20:
             return {'detected': False, 'reason': 'Insufficient data'}
+        
+        # CRITICAL: Normalize columns to lowercase for consistent access
+        data = self._normalize_columns(data)
         
         recent = data.tail(30)
         highs = recent['high'].values
@@ -538,6 +590,9 @@ class TechnicalAnalysisEngine:
         if len(data) < 20:
             return {'detected': False, 'reason': 'Insufficient data'}
         
+        # CRITICAL: Normalize columns to lowercase for consistent access
+        data = self._normalize_columns(data)
+        
         recent = data.tail(30)
         current_price = recent['close'].iloc[-1]
         highs = recent['high'].values
@@ -604,6 +659,9 @@ class TechnicalAnalysisEngine:
         if len(data) < 30:
             return {'detected': False, 'reason': 'Insufficient data'}
         
+        # CRITICAL: Normalize columns to lowercase for consistent access
+        data = self._normalize_columns(data)
+        
         recent = data.tail(50)  # Need more bars to find LOD
         lows = recent['low'].values
         closes = recent['close'].values
@@ -656,6 +714,9 @@ class TechnicalAnalysisEngine:
         """
         if len(data) < 30:
             return {'detected': False, 'reason': 'Insufficient data'}
+        
+        # CRITICAL: Normalize columns to lowercase for consistent access
+        data = self._normalize_columns(data)
         
         recent = data.tail(50)
         closes = recent['close'].values
@@ -975,6 +1036,9 @@ class TechnicalAnalysisEngine:
         if len(data) < 30:
             return {'detected': False, 'reason': 'Insufficient data'}
         
+        # CRITICAL: Normalize columns to lowercase for consistent access
+        data = self._normalize_columns(data)
+        
         recent = data.tail(30)
         current_price = recent['close'].iloc[-1]
         current_low = recent['low'].iloc[-1]
@@ -1056,6 +1120,9 @@ class TechnicalAnalysisEngine:
         if len(data) < 20:
             return {'detected': False, 'reason': 'Insufficient data'}
         
+        # CRITICAL: Normalize columns to lowercase for consistent access
+        data = self._normalize_columns(data)
+        
         recent = data.tail(20)
         closes = recent['close'].values
         
@@ -1119,6 +1186,21 @@ class TechnicalAnalysisEngine:
                 'recommended_action': 'CALL' or 'PUT' or 'HOLD'
             }
         """
+        # CRITICAL FIX: Normalize columns ONCE at entry point
+        # This ensures all detection methods receive lowercase columns
+        data = self._normalize_columns(data)
+        
+        if data is None or len(data) == 0:
+            return {
+                'patterns': [],
+                'best_pattern': None,
+                'targets': {},
+                'strike_suggestion': None,
+                'confidence_boost': 0.0,
+                'recommended_action': 'HOLD',
+                'reason': 'No data available for analysis'
+            }
+        
         patterns = []
         
         # Detect all patterns
